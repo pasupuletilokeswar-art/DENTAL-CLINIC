@@ -1,0 +1,25 @@
+# Dependencies
+node_modules
+*/node_modules
+**/node_modules
+
+# Git & CI
+.git
+.github
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Build & Output
+dist
+build
+*.tsbuildinfo
+
+# Logs & System
+*.log
+logs
+.DS_Store
+Thumbs.db
+

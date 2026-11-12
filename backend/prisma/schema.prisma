@@ -1,0 +1,471 @@
+// datasource db {
+//   provider = "postgresql"
+//   url      = env("DATABASE_URL")
+// }
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  RECEPTIONIST
+  DOCTOR_DENTAL
+  DOCTOR_ORTHO
+  ADMIN
+}
+
+enum Specialization {
+  DENTAL
+  ORTHOPEDIC
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum VisitType {
+  NEW_VISIT
+  FOLLOW_UP
+  EMERGENCY
+  ROUTINE_CHECKUP
+}
+
+enum PaymentMode {
+  CASH
+  UPI
+  CARD
+  BANK_TRANSFER
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+}
+
+enum ProcedureStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+// User / Authentication
+model User {
+  id           String      @id @default(uuid())
+  username     String      @unique
+  passwordHash String
+  fullName     String
+  email        String?     @unique
+  phone        String?
+  role         Role        @default(RECEPTIONIST)
+  isActive     Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  doctorProfile Doctor?
+  createdPatients Patient[] @relation("CreatedByUser")
+}
+
+// Doctor Details (Dental + Orthopedic)
+model Doctor {
+  id              String         @id @default(uuid())
+  userId          String         @unique
+  user            User           @relation(fields: [userId], references: [id])
+  specialization  Specialization
+  licenseNumber   String?
+  consultationFee Float          @default(500.00)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  appointments    Appointment[]
+  clinicalNotes   ClinicalNote[]
+  consultationBills ConsultationBill[]
+  procedures      Procedure[]
+}
+
+// Patient Registration (Phase 3)
+model Patient {
+  id              String         @id @default(uuid())
+  patientCode     String         @unique // DOC-2026-00001
+  name            String
+  mobile          String
+  email           String?
+  dob             DateTime?
+  age             Int
+  gender          Gender
+  registrationDate DateTime      @default(now())
+  address         String?
+  medicalAlerts   String?        // allergies, diabetes, BP, etc.
+  createdById     String?
+  createdBy       User?          @relation("CreatedByUser", fields: [createdById], references: [id])
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  appointments    Appointment[]
+  clinicalNotes   ClinicalNote[]
+  consultationBills ConsultationBill[]
+  pharmacySales   PharmacySale[]
+  procedures      Procedure[]
+
+  @@index([mobile])
+  @@index([patientCode])
+}
+
+// Appointment Management (Phase 5)
+model Appointment {
+  id              String            @id @default(uuid())
+  appointmentCode String            @unique
+  patientId       String
+  patient         Patient           @relation(fields: [patientId], references: [id])
+  doctorId        String
+  doctor          Doctor            @relation(fields: [doctorId], references: [id])
+  specialization  Specialization
+  appointmentDate DateTime          // Date component
+  startTime       DateTime          // Start timestamp
+  endTime         DateTime          // End timestamp
+  durationMinutes Int               @default(30)
+  visitType       VisitType         @default(NEW_VISIT)
+  procedureName   String?
+  status          AppointmentStatus @default(SCHEDULED)
+  reasonForVisit  String?
+  cancellationReason String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  clinicalNote    ClinicalNote?
+  consultationBill ConsultationBill?
+
+  @@index([doctorId, appointmentDate])
+  @@index([patientId])
+}
+
+// 9-Field Clinical Notes (Phase 6)
+model ClinicalNote {
+  id                       String       @id @default(uuid())
+  patientId                String
+  patient                  Patient      @relation(fields: [patientId], references: [id])
+  doctorId                 String
+  doctor                   Doctor       @relation(fields: [doctorId], references: [id])
+  appointmentId            String?      @unique
+  appointment              Appointment? @relation(fields: [appointmentId], references: [id])
+  consultationDate         DateTime     @default(now())
+  
+  // EXACT 9 FIELDS:
+  chiefComplaints          String       // 1. Chief Complaints
+  detailedMedicalHistory   String?      // 2. Detailed Medical History
+  teethChart               Json?        // 3. Teeth Chart (Interactive Dental teeth conditions JSON)
+  observations             String?      // 4. Observations
+  investigations           String?      // 5. Investigations (X-rays, blood reports, etc.)
+  diagnosis                String       // 6. Diagnosis
+  treatmentRecommendations String?      // 7. Treatment Recommendations
+  notes                    String?      // 8. Notes
+  advice                   String?      // 9. Advice
+
+  isLocked                 Boolean      @default(false)
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+
+  @@index([patientId])
+}
+
+// Consultation Billing (Phase 7)
+model ConsultationBill {
+  id              String        @id @default(uuid())
+  invoiceNumber   String        @unique // CBILL-2026-00001
+  patientId       String
+  patient         Patient       @relation(fields: [patientId], references: [id])
+  doctorId        String
+  doctor          Doctor        @relation(fields: [doctorId], references: [id])
+  appointmentId   String?       @unique
+  appointment     Appointment?  @relation(fields: [appointmentId], references: [id])
+  billDate        DateTime      @default(now())
+  consultationFee Float
+  discount        Float         @default(0.0)
+  taxRate         Float         @default(0.0) // GST %
+  taxAmount       Float         @default(0.0)
+  totalAmount     Float
+  paidAmount      Float         @default(0.0)
+  pendingBalance  Float         @default(0.0)
+  paymentStatus   PaymentStatus @default(UNPAID)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  payments        Payment[]
+
+  @@index([patientId])
+}
+
+// Procedure Master & Operations Management (Phase 9)
+model ProcedureMaster {
+  id             String         @id @default(uuid())
+  code           String         @unique
+  name           String
+  specialization Specialization
+  description    String?
+  standardCharge Float
+  estimatedMins  Int            @default(60)
+  isActive       Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  procedures     Procedure[]
+}
+
+model Procedure {
+  id                 String          @id @default(uuid())
+  procedureCode      String          @unique // PROC-2026-00001
+  patientId          String
+  patient            Patient         @relation(fields: [patientId], references: [id])
+  doctorId           String
+  doctor             Doctor          @relation(fields: [doctorId], references: [id])
+  procedureMasterId  String
+  procedureMaster    ProcedureMaster @relation(fields: [procedureMasterId], references: [id])
+  procedureDate      DateTime
+  charges            Float
+  status             ProcedureStatus @default(SCHEDULED)
+  clinicalNotes      String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  operationInvoice   OperationBill?
+
+  @@index([patientId])
+}
+
+model OperationBill {
+  id             String        @id @default(uuid())
+  invoiceNumber  String        @unique // OBILL-2026-00001
+  procedureId    String        @unique
+  procedure      Procedure     @relation(fields: [procedureId], references: [id])
+  billDate       DateTime      @default(now())
+  procedureFee   Float
+  consumablesFee Float         @default(0.0)
+  discount       Float         @default(0.0)
+  taxRate        Float         @default(0.0)
+  taxAmount      Float         @default(0.0)
+  totalAmount    Float
+  paidAmount     Float         @default(0.0)
+  pendingBalance Float         @default(0.0)
+  paymentStatus  PaymentStatus @default(UNPAID)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  payments       Payment[]
+}
+
+// Payment receipts tracking
+model Payment {
+  id                 String            @id @default(uuid())
+  receiptNumber      String            @unique // RCP-2026-00001
+  amount             Float
+  paymentMode        PaymentMode       @default(CASH)
+  paymentDate        DateTime          @default(now())
+  referenceNumber    String?           // transaction ID, check num
+  notes              String?
+  
+  consultationBillId String?
+  consultationBill   ConsultationBill? @relation(fields: [consultationBillId], references: [id])
+  
+  operationBillId    String?
+  operationBill      OperationBill?    @relation(fields: [operationBillId], references: [id])
+
+  pharmacySaleId     String?
+  pharmacySale       PharmacySale?     @relation(fields: [pharmacySaleId], references: [id])
+
+  createdAt          DateTime          @default(now())
+}
+
+// Pharmacy Management Models (Phase 8)
+model Supplier {
+  id          String   @id @default(uuid())
+  supplierCode String  @unique
+  name        String
+  contactName String?
+  mobile      String
+  email       String?
+  gstin       String?
+  address     String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  purchases   PurchaseInvoice[]
+}
+
+enum MedicineType {
+  TABLET
+  CAPSULE
+  SYRUP
+  INJECTION
+  OINTMENT
+  DROPS
+  DENTAL_GEL
+  MOUTHWASH
+  BANDAGE_SPLINT
+  OTHER
+}
+
+enum PrescriptionType {
+  OTC
+  SCHEDULE_H
+  SCHEDULE_H1
+  SCHEDULE_X
+}
+
+model MedicineMaster {
+  id               String           @id @default(uuid())
+  itemCode         String           @unique // MED-00001
+  medicineName     String
+  brandName        String?
+  manufacturer     String?
+  barcode          String?          @unique
+  hsnCode          String?
+  packageInfo      String?          // e.g., Strip of 10
+  buyingUnit       String           @default("STRIP")
+  sellingUnit      String           @default("TABLET")
+  unitRatio        Int              @default(1) // 1 strip = 10 tablets
+  medicineType     MedicineType     @default(TABLET)
+  strength         String?          // 500mg, 10ml, etc.
+  prescriptionType PrescriptionType @default(OTC)
+  reorderLevel     Int              @default(20)
+  specialization   Specialization?  // null if general, or DENTAL/ORTHO
+  isActive         Boolean          @default(true)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  batches          MedicineBatchStock[]
+  purchaseItems    PurchaseItem[]
+  saleItems        PharmacySaleItem[]
+}
+
+// Inventory FEFO Stock tracking
+model MedicineBatchStock {
+  id             String         @id @default(uuid())
+  medicineId     String
+  medicine       MedicineMaster @relation(fields: [medicineId], references: [id])
+  batchNumber    String
+  expiryDate     DateTime
+  quantityInBase Int            // Quantity in selling units
+  purchasePrice  Float
+  mrp            Float
+  sellingPrice   Float
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  purchaseItem   PurchaseItem?
+  saleItems      PharmacySaleItem[]
+
+  @@unique([medicineId, batchNumber])
+  @@index([medicineId, expiryDate])
+}
+
+model PurchaseInvoice {
+  id             String         @id @default(uuid())
+  invoiceNumber  String         @unique // Vendor invoice #
+  internalRef    String         @unique // PUR-2026-00001
+  supplierId     String
+  supplier       Supplier       @relation(fields: [supplierId], references: [id])
+  invoiceDate    DateTime
+  receivedDate   DateTime       @default(now())
+  totalAmount    Float
+  totalDiscount  Float          @default(0.0)
+  totalGst       Float          @default(0.0)
+  cgstAmount     Float          @default(0.0)
+  sgstAmount     Float          @default(0.0)
+  grandTotal     Float
+  paymentStatus  PaymentStatus  @default(PAID)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  items          PurchaseItem[]
+}
+
+model PurchaseItem {
+  id             String              @id @default(uuid())
+  purchaseId     String
+  purchase       PurchaseInvoice     @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  medicineId     String
+  medicine       MedicineMaster      @relation(fields: [medicineId], references: [id])
+  batchStockId   String?             @unique
+  batchStock     MedicineBatchStock? @relation(fields: [batchStockId], references: [id])
+  batchNumber    String
+  expiryDate     DateTime
+  quantityUnits  Int
+  purchaseRate   Float
+  discountPercent Float              @default(0.0)
+  gstPercent     Float               @default(12.0)
+  cgstRate       Float               @default(6.0)
+  sgstRate       Float               @default(6.0)
+  totalCost      Float
+}
+
+model PharmacySale {
+  id             String           @id @default(uuid())
+  invoiceNumber  String           @unique // PHARM-2026-00001
+  patientId      String?
+  patient        Patient?         @relation(fields: [patientId], references: [id])
+  saleDate       DateTime         @default(now())
+  subTotal       Float
+  discount       Float            @default(0.0)
+  totalGst       Float            @default(0.0)
+  grandTotal     Float
+  paidAmount     Float            @default(0.0)
+  pendingBalance Float            @default(0.0)
+  paymentStatus  PaymentStatus    @default(PAID)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  items          PharmacySaleItem[]
+  payments       Payment[]
+
+  @@index([patientId])
+}
+
+model PharmacySaleItem {
+  id             String             @id @default(uuid())
+  saleId         String
+  sale           PharmacySale       @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  medicineId     String
+  medicine       MedicineMaster     @relation(fields: [medicineId], references: [id])
+  batchStockId   String
+  batchStock     MedicineBatchStock @relation(fields: [batchStockId], references: [id])
+  quantity       Int
+  unitPrice      Float
+  discount       Float              @default(0.0)
+  gstRate        Float              @default(12.0)
+  totalAmount    Float
+}
+
+// Audit trail for inventory movements
+model StockMovement {
+  id             String   @id @default(uuid())
+  medicineId     String
+  batchNumber    String
+  movementType   String   // PURCHASE_IN, SALE_OUT, RETURN, ADJUSTMENT
+  quantityChange Int      // +ve or -ve
+  previousStock  Int
+  newStock       Int
+  referenceId    String?  // Purchase or Sale Invoice ID
+  remarks        String?
+  timestamp      DateTime @default(now())
+
+  @@index([medicineId, timestamp])
+}
+

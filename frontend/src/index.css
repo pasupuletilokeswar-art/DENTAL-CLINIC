@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+/* 
+ * Global Modern Squared Design System
+ * Transform entire application UI: cards, KPI widgets, sidebar buttons, inputs, modals to sharp squared geometry
+ */
+.rounded-3xl,
+.rounded-2xl,
+.rounded-xl,
+.rounded-lg,
+.rounded-md,
+.rounded-sm,
+.rounded,
+input,
+select,
+textarea,
+button,
+aside button,
+div[class*="bg-white"],
+div[class*="bg-slate-50"],
+div[class*="border"] {
+  border-radius: 0px !important;
+}
+
+/* Transform rounded pills into crisp squared blocks */
+.rounded-full {
+  border-radius: 0px !important;
+}
+
+/* Preserve circular shape for micro status indicators and badges */
+span[class*="w-2"][class*="h-2"],
+span[class*="w-2.5"][class*="h-2.5"],
+span[class*="w-3"][class*="h-3"],
+div[class*="w-2"][class*="h-2"],
+div[class*="w-2.5"][class*="h-2.5"],
+div[class*="w-3"][class*="h-3"],
+.status-indicator {
+  border-radius: 9999px !important;
+}
