@@ -11,12 +11,27 @@ const router = Router();
 const patientSchema = z.object({
   name: z.string().min(2, 'Patient name must be at least 2 characters'),
   mobile: z.string().min(10, 'Mobile must be at least 10 digits'),
-  email: z.string().email().optional().or(z.literal('')),
-  dob: z.string().optional().or(z.literal('')),
-  age: z.number().int().min(0, 'Age must be non-negative'),
-  gender: z.nativeEnum(Gender),
-  address: z.string().optional(),
-  medicalAlerts: z.string().optional(),
+  email: z
+    .string()
+    .optional()
+    .nullable()
+    .refine((val) => !val || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val), {
+      message: 'Invalid email address',
+    }),
+  dob: z.string().optional().nullable(),
+  age: z.preprocess((val) => {
+    if (typeof val === 'string') {
+      const parsed = parseInt(val, 10);
+      return isNaN(parsed) ? 0 : parsed;
+    }
+    return val;
+  }, z.number().int().min(0, 'Age must be non-negative')),
+  gender: z.preprocess((val) => {
+    if (typeof val === 'string') return val.toUpperCase();
+    return val;
+  }, z.nativeEnum(Gender)),
+  address: z.string().optional().nullable(),
+  medicalAlerts: z.string().optional().nullable(),
 });
 
 // Generate next sequential Patient ID: DOC-2026-00001
@@ -24,24 +39,27 @@ async function generatePatientCode(): Promise<string> {
   const currentYear = new Date().getFullYear();
   const prefix = `DOC-${currentYear}-`;
   
-  const lastPatient = await prisma.patient.findFirst({
+  const patients = await prisma.patient.findMany({
     where: {
       patientCode: {
         startsWith: prefix,
       },
     },
-    orderBy: {
-      patientCode: 'desc',
+    select: {
+      patientCode: true,
     },
   });
 
-  if (!lastPatient) {
-    return `${prefix}00001`;
+  let maxSeq = 0;
+  for (const p of patients) {
+    const parts = p.patientCode.split('-');
+    const num = parseInt(parts[2] || '0', 10);
+    if (!isNaN(num) && num > maxSeq) {
+      maxSeq = num;
+    }
   }
 
-  const parts = lastPatient.patientCode.split('-');
-  const seq = parseInt(parts[2] || '0', 10) + 1;
-  return `${prefix}${seq.toString().padStart(5, '0')}`;
+  return `${prefix}${(maxSeq + 1).toString().padStart(5, '0')}`;
 }
 
 // GET /api/patients - Listing & Search
@@ -121,7 +139,7 @@ router.get('/:id', authenticateToken, async (req: Request, res: Response) => {
             procedureMaster: true,
             operationInvoice: { include: { payments: true } },
           },
-          orderBy: { procedureDate: 'desc' },
+          orderBy: { procedureDate: 'asc' },
         },
       },
     });
@@ -156,32 +174,49 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const data = patientSchema.parse(req.body);
 
+    const cleanMobile = data.mobile.trim();
+
     // Check duplicate by mobile
     const existing = await prisma.patient.findFirst({
-      where: { mobile: data.mobile },
+      where: { mobile: cleanMobile },
     });
 
     if (existing) {
       return res.status(400).json({
         success: false,
-        message: `Patient with mobile number ${data.mobile} is already registered (${existing.name} - ${existing.patientCode})`,
+        message: `Patient with mobile number ${cleanMobile} is already registered (${existing.name} - ${existing.patientCode})`,
       });
     }
 
     const patientCode = await generatePatientCode();
 
+    // Verify createdById if user exists in DB
+    let validUserId: string | null = null;
+    if (req.user?.id) {
+      const u = await prisma.user.findUnique({ where: { id: req.user.id } });
+      if (u) validUserId = u.id;
+    }
+
+    let parsedDob: Date | null = null;
+    if (data.dob && typeof data.dob === 'string' && data.dob.trim()) {
+      const d = new Date(data.dob.trim());
+      if (!isNaN(d.getTime())) {
+        parsedDob = d;
+      }
+    }
+
     const newPatient = await prisma.patient.create({
       data: {
         patientCode,
-        name: data.name,
-        mobile: data.mobile,
-        email: data.email || null,
-        dob: data.dob ? new Date(data.dob) : null,
+        name: data.name.trim(),
+        mobile: cleanMobile,
+        email: data.email?.trim() || null,
+        dob: parsedDob,
         age: data.age,
         gender: data.gender,
-        address: data.address || null,
-        medicalAlerts: data.medicalAlerts || null,
-        createdById: req.user?.id,
+        address: data.address?.trim() || null,
+        medicalAlerts: data.medicalAlerts?.trim() || null,
+        createdById: validUserId,
       },
     });
 
@@ -195,7 +230,8 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     });
   } catch (err: any) {
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ success: false, errors: err.errors });
+      const firstError = err.errors[0]?.message || 'Validation error';
+      return res.status(400).json({ success: false, message: firstError, errors: err.errors });
     }
     res.status(500).json({ success: false, message: err.message });
   }
@@ -207,10 +243,12 @@ router.put('/:id', authenticateToken, async (req: Request, res: Response) => {
     const { id } = req.params;
     const data = patientSchema.parse(req.body);
 
+    const cleanMobile = data.mobile.trim();
+
     // Verify duplicate mobile for other patients
     const duplicate = await prisma.patient.findFirst({
       where: {
-        mobile: data.mobile,
+        mobile: cleanMobile,
         NOT: { id },
       },
     });
@@ -222,17 +260,25 @@ router.put('/:id', authenticateToken, async (req: Request, res: Response) => {
       });
     }
 
+    let parsedDob: Date | null = null;
+    if (data.dob && typeof data.dob === 'string' && data.dob.trim()) {
+      const d = new Date(data.dob.trim());
+      if (!isNaN(d.getTime())) {
+        parsedDob = d;
+      }
+    }
+
     const updated = await prisma.patient.update({
       where: { id },
       data: {
-        name: data.name,
-        mobile: data.mobile,
-        email: data.email || null,
-        dob: data.dob ? new Date(data.dob) : null,
+        name: data.name.trim(),
+        mobile: cleanMobile,
+        email: data.email?.trim() || null,
+        dob: parsedDob,
         age: data.age,
         gender: data.gender,
-        address: data.address || null,
-        medicalAlerts: data.medicalAlerts || null,
+        address: data.address?.trim() || null,
+        medicalAlerts: data.medicalAlerts?.trim() || null,
       },
     });
 
@@ -245,7 +291,8 @@ router.put('/:id', authenticateToken, async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ success: false, errors: err.errors });
+      const firstError = err.errors[0]?.message || 'Validation error';
+      return res.status(400).json({ success: false, message: firstError, errors: err.errors });
     }
     res.status(500).json({ success: false, message: err.message });
   }

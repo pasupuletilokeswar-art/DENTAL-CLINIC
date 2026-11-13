@@ -46,44 +46,175 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/procedures - Schedule an operation / procedure
-const scheduleSchema = z.object({
+// Generate sequential procedure code: PROC-2026-00001
+async function generateProcedureCode(): Promise<string> {
+  const currentYear = new Date().getFullYear();
+  const prefix = `PROC-${currentYear}-`;
+  const lastProc = await prisma.procedure.findFirst({
+    where: { procedureCode: { startsWith: prefix } },
+    orderBy: { procedureCode: 'desc' },
+  });
+
+  if (!lastProc) return `${prefix}00001`;
+  const parts = lastProc.procedureCode.split('-');
+  const seq = parseInt(parts[2] || '0', 10) + 1;
+  return `${prefix}${seq.toString().padStart(5, '0')}`;
+}
+
+// POST /api/procedures - Create / Schedule a Procedure
+const createProcedureSchema = z.object({
   patientId: z.string().min(1, 'Patient is required'),
-  doctorId: z.string().min(1, 'Doctor is required'),
-  procedureMasterId: z.string().min(1, 'Procedure is required'),
+  patientCode: z.string().optional().nullable(),
+  doctorId: z.string().optional().nullable(),
+  dentistName: z.string().optional().nullable(),
+  procedureMasterId: z.string().optional().nullable(),
+  procedureName: z.string().optional().nullable(),
   procedureDate: z.string().min(1, 'Procedure date is required'),
-  charges: z.number().min(0),
-  clinicalNotes: z.string().optional(),
+  toothNumber: z.string().optional().nullable(),
+  charges: z.number().min(0).optional().default(0),
+  clinicalNotes: z.string().optional().nullable(),
+  procedureDescription: z.string().optional().nullable(),
+  description: z.string().optional().nullable(),
+  status: z.string().optional().default('PLANNED'),
 });
 
 router.post('/', authenticateToken, async (req: Request, res: Response) => {
   try {
-    const data = scheduleSchema.parse(req.body);
+    const data = createProcedureSchema.parse(req.body);
 
-    const count = await prisma.procedure.count();
-    const procedureCode = `PROC-${new Date().getFullYear()}-${(count + 1).toString().padStart(5, '0')}`;
+    // 1. Validate Patient
+    const patient = await prisma.patient.findFirst({
+      where: {
+        OR: [{ id: data.patientId }, { patientCode: data.patientId }],
+      },
+    });
+
+    if (!patient) {
+      return res.status(404).json({ success: false, message: 'Selected patient not found' });
+    }
+
+    // 2. Resolve Procedure Master & Procedure Name
+    let resolvedMasterId: string | null = data.procedureMasterId || null;
+    let resolvedProcName: string | null = data.procedureName?.trim() || null;
+    let standardCharge = 0;
+
+    if (resolvedMasterId) {
+      const master = await prisma.procedureMaster.findUnique({ where: { id: resolvedMasterId } });
+      if (master) {
+        if (!resolvedProcName) resolvedProcName = master.name;
+        standardCharge = master.standardCharge;
+      }
+    }
+
+    if (resolvedProcName && !resolvedMasterId) {
+      const master = await prisma.procedureMaster.findFirst({
+        where: { name: { equals: resolvedProcName, mode: 'insensitive' } },
+      });
+      if (master) {
+        resolvedMasterId = master.id;
+        standardCharge = master.standardCharge;
+      }
+    }
+
+    if (!resolvedProcName) {
+      resolvedProcName = 'Consultation';
+    }
+
+    // 3. Resolve Doctor / Dentist Name
+    let resolvedDoctorId: string | null = data.doctorId || null;
+    let resolvedDentistName: string | null = data.dentistName?.trim() || null;
+
+    if (resolvedDoctorId) {
+      const doc = await prisma.doctor.findUnique({
+        where: { id: resolvedDoctorId },
+        include: { user: { select: { fullName: true } } },
+      });
+      if (doc) {
+        if (!resolvedDentistName) resolvedDentistName = doc.user.fullName;
+      } else {
+        resolvedDoctorId = null;
+      }
+    }
+
+    // 4. Resolve Procedure Status
+    let normalizedStatus: ProcedureStatus = ProcedureStatus.PLANNED;
+    const rawStatus = (data.status || 'PLANNED').toUpperCase().replace(/[\s-]+/g, '_');
+    if (rawStatus === 'COMPLETED') {
+      normalizedStatus = ProcedureStatus.COMPLETED;
+    } else if (rawStatus === 'IN_PROGRESS') {
+      normalizedStatus = ProcedureStatus.IN_PROGRESS;
+    } else if (rawStatus === 'SCHEDULED') {
+      normalizedStatus = ProcedureStatus.SCHEDULED;
+    } else if (rawStatus === 'CANCELLED') {
+      normalizedStatus = ProcedureStatus.CANCELLED;
+    } else {
+      normalizedStatus = ProcedureStatus.PLANNED;
+    }
+
+    // 5. Clinical notes / Description
+    const clinicalNotes =
+      data.clinicalNotes?.trim() ||
+      data.procedureDescription?.trim() ||
+      data.description?.trim() ||
+      null;
+
+    const parsedDate = new Date(data.procedureDate);
+
+    // 6. Prevent accidental duplicate submissions (within 3 seconds for same patient, procedure & tooth)
+    const recentDuplicate = await prisma.procedure.findFirst({
+      where: {
+        patientId: patient.id,
+        procedureName: resolvedProcName,
+        toothNumber: data.toothNumber?.trim() || null,
+        createdAt: { gte: new Date(Date.now() - 3000) },
+      },
+      include: {
+        patient: { select: { id: true, name: true, patientCode: true, mobile: true } },
+        doctor: { include: { user: { select: { fullName: true } } } },
+        procedureMaster: true,
+      },
+    });
+
+    if (recentDuplicate) {
+      return res.status(200).json({
+        success: true,
+        message: 'Procedure already saved (duplicate submission prevented)',
+        procedure: recentDuplicate,
+      });
+    }
+
+    const procedureCode = await generateProcedureCode();
+    const finalCharges = data.charges && data.charges > 0 ? data.charges : standardCharge;
 
     const proc = await prisma.procedure.create({
       data: {
         procedureCode,
-        patientId: data.patientId,
-        doctorId: data.doctorId,
-        procedureMasterId: data.procedureMasterId,
-        procedureDate: new Date(data.procedureDate),
-        charges: data.charges,
-        clinicalNotes: data.clinicalNotes || null,
-        status: ProcedureStatus.SCHEDULED,
+        patientId: patient.id,
+        doctorId: resolvedDoctorId,
+        dentistName: resolvedDentistName,
+        procedureMasterId: resolvedMasterId,
+        procedureName: resolvedProcName,
+        toothNumber: data.toothNumber?.trim() || null,
+        procedureDate: parsedDate,
+        charges: finalCharges,
+        clinicalNotes,
+        status: normalizedStatus,
       },
       include: {
-        patient: true,
+        patient: { select: { id: true, name: true, patientCode: true, mobile: true } },
         doctor: { include: { user: { select: { fullName: true } } } },
         procedureMaster: true,
       },
     });
 
     emitRealtimeEvent('procedure:scheduled', proc);
+    emitRealtimeEvent('procedure:created', proc);
 
-    res.status(201).json({ success: true, message: 'Procedure scheduled successfully', procedure: proc });
+    res.status(201).json({
+      success: true,
+      message: 'Procedure created successfully',
+      procedure: proc,
+    });
   } catch (err: any) {
     if (err instanceof z.ZodError) return res.status(400).json({ success: false, errors: err.errors });
     res.status(500).json({ success: false, message: err.message });
