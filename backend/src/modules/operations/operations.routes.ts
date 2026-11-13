@@ -61,7 +61,7 @@ async function generateProcedureCode(): Promise<string> {
   return `${prefix}${seq.toString().padStart(5, '0')}`;
 }
 
-// POST /api/procedures - Create / Schedule a Procedure
+// POST /api/procedures - Create / Schedule a Procedure (Supports single or multiple procedures)
 const createProcedureSchema = z.object({
   patientId: z.string().min(1, 'Patient is required'),
   patientCode: z.string().optional().nullable(),
@@ -69,6 +69,7 @@ const createProcedureSchema = z.object({
   dentistName: z.string().optional().nullable(),
   procedureMasterId: z.string().optional().nullable(),
   procedureName: z.string().optional().nullable(),
+  procedureNames: z.array(z.string()).optional().nullable(),
   procedureDate: z.string().min(1, 'Procedure date is required'),
   toothNumber: z.string().optional().nullable(),
   charges: z.number().min(0).optional().default(0),
@@ -93,32 +94,17 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'Selected patient not found' });
     }
 
-    // 2. Resolve Procedure Master & Procedure Name
-    let resolvedMasterId: string | null = data.procedureMasterId || null;
-    let resolvedProcName: string | null = data.procedureName?.trim() || null;
-    let standardCharge = 0;
-
-    if (resolvedMasterId) {
-      const master = await prisma.procedureMaster.findUnique({ where: { id: resolvedMasterId } });
-      if (master) {
-        if (!resolvedProcName) resolvedProcName = master.name;
-        standardCharge = master.standardCharge;
-      }
+    // 2. Resolve Procedure Names (support multiple or single)
+    let procNames: string[] = [];
+    if (Array.isArray(data.procedureNames) && data.procedureNames.length > 0) {
+      procNames = data.procedureNames.map((n) => n.trim()).filter((n) => n.length > 0);
+    } else if (data.procedureName && data.procedureName.trim().length > 0) {
+      procNames = [data.procedureName.trim()];
+    } else {
+      procNames = ['Consultation'];
     }
-
-    if (resolvedProcName && !resolvedMasterId) {
-      const master = await prisma.procedureMaster.findFirst({
-        where: { name: { equals: resolvedProcName, mode: 'insensitive' } },
-      });
-      if (master) {
-        resolvedMasterId = master.id;
-        standardCharge = master.standardCharge;
-      }
-    }
-
-    if (!resolvedProcName) {
-      resolvedProcName = 'Consultation';
-    }
+    // Remove accidental duplicate entries in the same submission list
+    procNames = Array.from(new Set(procNames));
 
     // 3. Resolve Doctor / Dentist Name
     let resolvedDoctorId: string | null = data.doctorId || null;
@@ -160,13 +146,13 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
 
     const parsedDate = new Date(data.procedureDate);
 
-    // 6. Prevent accidental duplicate submissions (within 3 seconds for same patient, procedure & tooth)
-    const recentDuplicate = await prisma.procedure.findFirst({
+    // 6. Prevent accidental rapid double-submission (within 4 seconds for same patient and procedure names)
+    const recentDuplicate = await prisma.procedure.findMany({
       where: {
         patientId: patient.id,
-        procedureName: resolvedProcName,
+        procedureName: { in: procNames },
         toothNumber: data.toothNumber?.trim() || null,
-        createdAt: { gte: new Date(Date.now() - 3000) },
+        createdAt: { gte: new Date(Date.now() - 4000) },
       },
       include: {
         patient: { select: { id: true, name: true, patientCode: true, mobile: true } },
@@ -175,45 +161,78 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
       },
     });
 
-    if (recentDuplicate) {
+    if (recentDuplicate.length >= procNames.length) {
       return res.status(200).json({
         success: true,
-        message: 'Procedure already saved (duplicate submission prevented)',
-        procedure: recentDuplicate,
+        message: 'Procedures already saved (duplicate submission prevented)',
+        procedure: recentDuplicate[0],
+        procedures: recentDuplicate,
       });
     }
 
-    const procedureCode = await generateProcedureCode();
-    const finalCharges = data.charges && data.charges > 0 ? data.charges : standardCharge;
+    // 7. Create each procedure record
+    const createdProcedures = [];
+    for (const procName of procNames) {
+      // Lookup procedure master if exists
+      let matchedMasterId: string | null = null;
+      let standardCharge = 0;
 
-    const proc = await prisma.procedure.create({
-      data: {
-        procedureCode,
-        patientId: patient.id,
-        doctorId: resolvedDoctorId,
-        dentistName: resolvedDentistName,
-        procedureMasterId: resolvedMasterId,
-        procedureName: resolvedProcName,
-        toothNumber: data.toothNumber?.trim() || null,
-        procedureDate: parsedDate,
-        charges: finalCharges,
-        clinicalNotes,
-        status: normalizedStatus,
-      },
-      include: {
-        patient: { select: { id: true, name: true, patientCode: true, mobile: true } },
-        doctor: { include: { user: { select: { fullName: true } } } },
-        procedureMaster: true,
-      },
-    });
+      const master = await prisma.procedureMaster.findFirst({
+        where: { name: { equals: procName, mode: 'insensitive' } },
+      });
+      if (master) {
+        matchedMasterId = master.id;
+        standardCharge = master.standardCharge;
+      }
 
-    emitRealtimeEvent('procedure:scheduled', proc);
-    emitRealtimeEvent('procedure:created', proc);
+      // Calculate charges
+      let procCharge = standardCharge;
+      if (data.charges && data.charges > 0) {
+        if (procNames.length === 1) {
+          procCharge = data.charges;
+        } else if (standardCharge > 0) {
+          procCharge = standardCharge;
+        } else {
+          procCharge = Math.round(data.charges / procNames.length);
+        }
+      }
+
+      const procedureCode = await generateProcedureCode();
+
+      const created = await prisma.procedure.create({
+        data: {
+          procedureCode,
+          patientId: patient.id,
+          doctorId: resolvedDoctorId,
+          dentistName: resolvedDentistName,
+          procedureMasterId: matchedMasterId,
+          procedureName: procName,
+          toothNumber: data.toothNumber?.trim() || null,
+          procedureDate: parsedDate,
+          charges: procCharge,
+          clinicalNotes,
+          status: normalizedStatus,
+        },
+        include: {
+          patient: { select: { id: true, name: true, patientCode: true, mobile: true } },
+          doctor: { include: { user: { select: { fullName: true } } } },
+          procedureMaster: true,
+        },
+      });
+
+      emitRealtimeEvent('procedure:scheduled', created);
+      emitRealtimeEvent('procedure:created', created);
+      createdProcedures.push(created);
+    }
 
     res.status(201).json({
       success: true,
-      message: 'Procedure created successfully',
-      procedure: proc,
+      message:
+        createdProcedures.length === 1
+          ? 'Procedure created successfully'
+          : `${createdProcedures.length} procedures created successfully`,
+      procedure: createdProcedures[0],
+      procedures: createdProcedures,
     });
   } catch (err: any) {
     if (err instanceof z.ZodError) return res.status(400).json({ success: false, errors: err.errors });

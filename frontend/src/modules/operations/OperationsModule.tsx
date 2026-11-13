@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Scissors,
   Plus,
@@ -12,6 +12,8 @@ import {
   X,
   Stethoscope,
   Info,
+  Check,
+  Layers,
 } from 'lucide-react';
 import api from '../../services/api';
 import { Procedure, ProcedureMaster, Patient, Doctor } from '../../types';
@@ -22,15 +24,75 @@ interface OperationsModuleProps {
   onNavigateToBillingProcedure?: (procedure: Procedure) => void;
 }
 
-const STANDARD_PROCEDURES = [
-  'Consultation',
-  'Root Canal Treatment (RCT)',
-  'Tooth Extraction',
-  'Dental Scaling',
-  'Dental Filling',
-  'Crown Placement',
-  'Tooth Implant',
-  'Other procedures',
+export interface ProcedureCategoryGroup {
+  category: string;
+  procedures: string[];
+}
+
+export const PROCEDURE_CATEGORIES: ProcedureCategoryGroup[] = [
+  {
+    category: 'Consultation & Examination',
+    procedures: ['Consultation', 'Dental Examination', 'Oral Examination', 'Diagnosis'],
+  },
+  {
+    category: 'Restorative Procedures',
+    procedures: [
+      'Dental Filling',
+      'GIC Restoration',
+      'Composite Restoration',
+      'Amalgam Restoration',
+      'Crown Placement',
+      'Bridge Placement',
+      'Inlay / Onlay',
+    ],
+  },
+  {
+    category: 'Endodontic Procedures',
+    procedures: ['Root Canal Treatment (RCT)', 'Re-RCT', 'Pulp Capping', 'Pulpotomy'],
+  },
+  {
+    category: 'Surgical Procedures',
+    procedures: [
+      'Tooth Extraction',
+      'Surgical Extraction',
+      'Impacted Tooth Removal',
+      'Irrigation',
+      'Suture Placement',
+      'Sutures Removal',
+      'Incision and Drainage',
+    ],
+  },
+  {
+    category: 'Periodontal Procedures',
+    procedures: ['Dental Scaling', 'Polishing', 'Deep Scaling', 'Root Planing', 'Gingival Treatment'],
+  },
+  {
+    category: 'Prosthodontic Procedures',
+    procedures: [
+      'Denture Placement',
+      'Denture Adjustment',
+      'Impression Taking',
+      'Temporary Crown Placement',
+    ],
+  },
+  {
+    category: 'Orthodontic Procedures',
+    procedures: [
+      'Orthodontic Consultation',
+      'Orthodontic Alignment',
+      'Braces Placement',
+      'Retainer Placement',
+    ],
+  },
+  {
+    category: 'Other Procedures',
+    procedures: [
+      'Fluoride Application',
+      'Sealant Application',
+      'Tooth Whitening',
+      'Other Procedure',
+    ],
+  },
 ];
 
 export const OperationsModule: React.FC<OperationsModuleProps> = ({
@@ -44,8 +106,9 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
   // Create Procedure Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
-  const [selectedProcedureOption, setSelectedProcedureOption] = useState('Consultation');
-  const [customProcedureName, setCustomProcedureName] = useState('');
+  const [selectedProcedures, setSelectedProcedures] = useState<string[]>(['Consultation']);
+  const [procedureSearch, setProcedureSearch] = useState('');
+  const [customProcedureInput, setCustomProcedureInput] = useState('');
   const [procedureDate, setProcedureDate] = useState(new Date().toISOString().substring(0, 10));
   const [toothNumber, setToothNumber] = useState('');
   const [doctorId, setDoctorId] = useState('');
@@ -104,10 +167,26 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
     };
   }, []);
 
+  const calculateEstimatedCharges = (procs: string[]) => {
+    let total = 0;
+    procs.forEach((pName) => {
+      const matched = procedureMasters.find(
+        (m) => m.name.toLowerCase() === pName.toLowerCase()
+      );
+      if (matched) {
+        total += matched.standardCharge;
+      } else {
+        total += 500;
+      }
+    });
+    return total;
+  };
+
   const openCreateModal = () => {
     setSelectedPatient(null);
-    setSelectedProcedureOption('Consultation');
-    setCustomProcedureName('');
+    setSelectedProcedures(['Consultation']);
+    setProcedureSearch('');
+    setCustomProcedureInput('');
     setProcedureDate(new Date().toISOString().substring(0, 10));
     setToothNumber('');
     setDescription('');
@@ -128,19 +207,45 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
     setShowCreateModal(true);
   };
 
-  const handleProcedureSelectionChange = (procName: string) => {
-    setSelectedProcedureOption(procName);
-    if (procName !== 'Other procedures') {
-      const matchedMaster = procedureMasters.find(
-        (m) => m.name.toLowerCase() === procName.toLowerCase()
-      );
-      if (matchedMaster) {
-        setCharges(matchedMaster.standardCharge);
-      }
+  const handleToggleProcedure = (procName: string) => {
+    let updated: string[];
+    if (selectedProcedures.includes(procName)) {
+      updated = selectedProcedures.filter((p) => p !== procName);
     } else {
-      setCharges(0);
+      updated = [...selectedProcedures, procName];
     }
+    setSelectedProcedures(updated);
+    setCharges(calculateEstimatedCharges(updated));
   };
+
+  const handleRemoveProcedure = (procName: string) => {
+    const updated = selectedProcedures.filter((p) => p !== procName);
+    setSelectedProcedures(updated);
+    setCharges(calculateEstimatedCharges(updated));
+  };
+
+  const handleAddCustomProcedure = () => {
+    const trimmed = customProcedureInput.trim();
+    if (!trimmed) return;
+    if (!selectedProcedures.includes(trimmed)) {
+      const updated = [...selectedProcedures, trimmed];
+      setSelectedProcedures(updated);
+      setCharges(calculateEstimatedCharges(updated));
+    }
+    setCustomProcedureInput('');
+  };
+
+  const filteredCategories = useMemo(() => {
+    const query = procedureSearch.trim().toLowerCase();
+    if (!query) return PROCEDURE_CATEGORIES;
+
+    return PROCEDURE_CATEGORIES.map((cat) => ({
+      category: cat.category,
+      procedures: cat.procedures.filter(
+        (p) => p.toLowerCase().includes(query) || cat.category.toLowerCase().includes(query)
+      ),
+    })).filter((cat) => cat.procedures.length > 0);
+  }, [procedureSearch]);
 
   const handleSaveProcedure = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -152,13 +257,8 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
       return;
     }
 
-    const finalProcedureName =
-      selectedProcedureOption === 'Other procedures'
-        ? customProcedureName.trim()
-        : selectedProcedureOption;
-
-    if (!finalProcedureName) {
-      setFormError('Please enter a valid procedure name.');
+    if (selectedProcedures.length === 0) {
+      setFormError('Please select at least one dental procedure.');
       return;
     }
 
@@ -178,11 +278,6 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
       resolvedDentistName = customDentistName.trim();
     }
 
-    // Determine matching procedure master if any
-    const matchedMaster = procedureMasters.find(
-      (m) => m.name.toLowerCase() === finalProcedureName.toLowerCase()
-    );
-
     // Map UI status to backend enum
     let backendStatus = 'PLANNED';
     if (status === 'In Progress') backendStatus = 'IN_PROGRESS';
@@ -195,8 +290,8 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
         patientCode: selectedPatient.patientCode,
         doctorId: resolvedDoctorId,
         dentistName: resolvedDentistName || undefined,
-        procedureMasterId: matchedMaster?.id || undefined,
-        procedureName: finalProcedureName,
+        procedureNames: selectedProcedures,
+        procedureName: selectedProcedures[0] || 'Consultation',
         procedureDate,
         toothNumber: toothNumber.trim() || undefined,
         charges,
@@ -206,7 +301,10 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
       });
 
       if (res.data.success) {
-        setFormSuccess('Procedure created and linked to patient successfully!');
+        setFormSuccess(
+          res.data.message ||
+            `${selectedProcedures.length} procedure(s) created and linked to patient successfully!`
+        );
         fetchData();
         setTimeout(() => {
           setShowCreateModal(false);
@@ -437,37 +535,163 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
                 </div>
               </div>
 
-              {/* Field 3: Procedure Name */}
+              {/* Field 3: Procedure Name (Multiple Selection Supported) */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Procedure Name <span className="text-red-500">*</span>
-                </label>
-                <select
-                  required
-                  value={selectedProcedureOption}
-                  onChange={(e) => handleProcedureSelectionChange(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
-                >
-                  {STANDARD_PROCEDURES.map((pName) => (
-                    <option key={pName} value={pName}>
-                      {pName}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                    <span>Procedure Name(s)</span>
+                    <span className="text-red-500">*</span>
+                    <span className="text-[11px] font-normal text-slate-400">
+                      (Select one or multiple for this visit)
+                    </span>
+                  </label>
+                  {selectedProcedures.length > 0 && (
+                    <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                      {selectedProcedures.length} selected
+                    </span>
+                  )}
+                </div>
 
-                {selectedProcedureOption === 'Other procedures' && (
-                  <div className="mt-2">
-                    <input
-                      type="text"
-                      required
-                      value={customProcedureName}
-                      onChange={(e) => setCustomProcedureName(e.target.value)}
-                      placeholder="Enter custom dental procedure name..."
-                      className="w-full px-3 py-2 bg-white border border-blue-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-blue-500 transition"
-                      autoFocus
-                    />
-                  </div>
-                )}
+                {/* Selected procedure tags / chips */}
+                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl mb-2 min-h-[46px] flex flex-wrap items-center gap-1.5">
+                  {selectedProcedures.length === 0 ? (
+                    <span className="text-xs text-slate-400 italic">
+                      No procedures selected. Click procedures below to add them.
+                    </span>
+                  ) : (
+                    <>
+                      {selectedProcedures.map((procName) => (
+                        <span
+                          key={procName}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-100/90 text-blue-900 border border-blue-200 shadow-xs"
+                        >
+                          <span>{procName}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveProcedure(procName)}
+                            className="p-0.5 hover:bg-blue-200 rounded-md text-blue-700 hover:text-blue-900 transition cursor-pointer"
+                            title={`Remove ${procName}`}
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                      {selectedProcedures.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedProcedures([]);
+                            setCharges(0);
+                          }}
+                          className="text-[11px] font-medium text-slate-400 hover:text-red-600 transition ml-auto px-1 cursor-pointer"
+                        >
+                          Clear all
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {/* Searchable procedure filter input */}
+                <div className="relative mb-2">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={procedureSearch}
+                    onChange={(e) => setProcedureSearch(e.target.value)}
+                    placeholder="Search dental procedures (e.g. Scaling, Suture, Irrigation, RCT)..."
+                    className="w-full pl-8 pr-7 py-1.5 bg-white border border-slate-200 rounded-xl text-xs placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                  />
+                  {procedureSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setProcedureSearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Categorized Procedure List */}
+                <div className="max-h-56 overflow-y-auto space-y-3 p-2 bg-slate-50/70 border border-slate-200 rounded-xl">
+                  {filteredCategories.length === 0 ? (
+                    <div className="text-center py-4 text-xs text-slate-500">
+                      No matching procedures found for "{procedureSearch}". You can add it as a custom procedure below.
+                    </div>
+                  ) : (
+                    filteredCategories.map((group) => {
+                      const selectedCountInGroup = group.procedures.filter((p) =>
+                        selectedProcedures.includes(p)
+                      ).length;
+
+                      return (
+                        <div key={group.category} className="bg-white p-2 rounded-lg border border-slate-200/80">
+                          <div className="flex items-center justify-between mb-1.5 px-0.5">
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                              {group.category}
+                            </span>
+                            {selectedCountInGroup > 0 && (
+                              <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200">
+                                {selectedCountInGroup} selected
+                              </span>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                            {group.procedures.map((pName) => {
+                              const isSelected = selectedProcedures.includes(pName);
+                              return (
+                                <button
+                                  type="button"
+                                  key={pName}
+                                  onClick={() => handleToggleProcedure(pName)}
+                                  className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium border text-left transition cursor-pointer ${
+                                    isSelected
+                                      ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                                  }`}
+                                >
+                                  <span className="truncate pr-1">{pName}</span>
+                                  {isSelected ? (
+                                    <Check className="w-3.5 h-3.5 shrink-0 text-white" />
+                                  ) : (
+                                    <span className="w-3.5 h-3.5 shrink-0 rounded border border-slate-300 inline-block" />
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Custom / Other Procedure Input */}
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={customProcedureInput}
+                    onChange={(e) => setCustomProcedureInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddCustomProcedure();
+                      }
+                    }}
+                    placeholder="Add custom procedure name if not listed above..."
+                    className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-blue-500 transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddCustomProcedure}
+                    disabled={!customProcedureInput.trim()}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white text-xs font-semibold rounded-xl transition cursor-pointer flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add</span>
+                  </button>
+                </div>
               </div>
 
               {/* Field 4 & 5: Procedure Date and Tooth Number */}
