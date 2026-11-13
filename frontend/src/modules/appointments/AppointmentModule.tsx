@@ -64,6 +64,33 @@ const CLINIC_TIME_SLOTS = [
   '16:00', '16:30', '17:00', '17:30', '18:00', '18:30',
 ];
 
+// Clinical symptoms matching uploaded clinic questionnaire
+export const CLINICAL_SYMPTOMS = [
+  'Tooth pain',
+  'Sensitivity',
+  'Swelling',
+  'Food lodgement',
+  'Bleeding gums',
+  'Difficulty chewing',
+  'Broken tooth',
+  'Jaw pain',
+  'Other',
+];
+
+// Quick procedure templates
+export const PROCEDURE_TEMPLATES = [
+  'Root Canal Treatment (RCT)',
+  'Scaling & Ultrasonic Cleaning',
+  'Tooth Extraction / Wisdom Tooth',
+  'Composite Tooth Filling',
+  'Dental Crown & Bridge Fitting',
+  'Braces Wire / Aligners Check',
+  'Dental Implant Consultation',
+  'Complete Denture Assessment',
+  'Orthopedic Knee / Joint Evaluation',
+  'Routine Clinical Checkup',
+];
+
 export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
   onNavigateToNotes,
   onNavigateToBilling,
@@ -110,6 +137,23 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
     procedureName: '',
     reasonForVisit: '',
   });
+
+  // Toggle clinical symptom or procedure in procedureName string
+  const toggleClinicalReason = (item: string) => {
+    const current = bookingData.procedureName
+      ? bookingData.procedureName
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+    let updated: string[];
+    if (current.some((s) => s.toLowerCase() === item.toLowerCase())) {
+      updated = current.filter((s) => s.toLowerCase() !== item.toLowerCase());
+    } else {
+      updated = [...current, item];
+    }
+    setBookingData((prev) => ({ ...prev, procedureName: updated.join(', ') }));
+  };
   const [busySlots, setBusySlots] = useState<any[]>([]);
   const [loadingBusySlots, setLoadingBusySlots] = useState(false);
   const [bookingError, setBookingError] = useState('');
@@ -1449,34 +1493,110 @@ For inquiries or rescheduling, reply directly to this message.`;
               </div>
 
               {/* Visit Type & Procedure / Follow-Up Details */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-1">
-                    Visit Type
-                  </label>
-                  <select
-                    value={bookingData.visitType}
-                    onChange={(e) => setBookingData({ ...bookingData, visitType: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-none text-xs font-semibold text-slate-800 focus:outline-none focus:border-[#0090e7]"
-                  >
-                    <option value="NEW_VISIT">New Visit (Initial Consultation)</option>
-                    <option value="FOLLOW_UP">Follow Up (Repeat / Check-up)</option>
-                    <option value="EMERGENCY">Emergency (Acute Pain / Trauma)</option>
-                    <option value="ROUTINE_CHECKUP">Routine Clinical Checkup</option>
-                  </select>
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-1">
+                      Visit Type
+                    </label>
+                    <select
+                      value={bookingData.visitType}
+                      onChange={(e) => setBookingData({ ...bookingData, visitType: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#0090e7]/30 focus:border-[#0090e7]"
+                    >
+                      <option value="NEW_VISIT">New Visit (Initial Consultation)</option>
+                      <option value="FOLLOW_UP">Follow Up (Repeat / Check-up)</option>
+                      <option value="EMERGENCY">Emergency (Acute Pain / Trauma)</option>
+                      <option value="ROUTINE_CHECKUP">Routine Clinical Checkup</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-1">
+                      Procedure Template <span className="text-slate-400 font-normal lowercase">(optional quick-fill)</span>
+                    </label>
+                    <select
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (!val) return;
+                        setBookingData((prev) => ({
+                          ...prev,
+                          procedureName: prev.procedureName ? `${prev.procedureName}, ${val}` : val,
+                        }));
+                      }}
+                      defaultValue=""
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#0090e7]/30 focus:border-[#0090e7]"
+                    >
+                      <option value="">-- Select Common Procedure --</option>
+                      {PROCEDURE_TEMPLATES.map((tmpl) => (
+                        <option key={tmpl} value={tmpl}>
+                          {tmpl}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
+                {/* Free Text Input for Procedure / Reason */}
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-1">
-                    Procedure / Clinical Reason
+                    Procedure / Clinical Reasoning <span className="text-slate-400 font-normal lowercase">(type or click symptoms below)</span>
                   </label>
                   <input
                     type="text"
                     value={bookingData.procedureName}
                     onChange={(e) => setBookingData({ ...bookingData, procedureName: e.target.value })}
-                    placeholder="e.g. Root Canal Sitting 2, Braces Wire, Scaling..."
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-none text-xs font-medium text-slate-800 focus:outline-none focus:border-[#0090e7]"
+                    placeholder="e.g. Tooth pain, Root Canal Sitting 2, Bleeding gums..."
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-medium text-slate-900 shadow-inner focus:outline-none focus:ring-2 focus:ring-[#0090e7]/30 focus:border-[#0090e7]"
                   />
+                </div>
+
+                {/* Clinical Reasoning / Symptom Chips (matches clinic questionnaire design) */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                      Chief Complaints / Symptoms:
+                    </span>
+                    <span className="text-[10px] text-slate-400">Click to add/remove</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {CLINICAL_SYMPTOMS.map((symptom) => {
+                      const selected = (bookingData.procedureName || '')
+                        .toLowerCase()
+                        .includes(symptom.toLowerCase());
+                      return (
+                        <button
+                          key={symptom}
+                          type="button"
+                          onClick={() => toggleClinicalReason(symptom)}
+                          className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border text-left text-xs font-medium transition cursor-pointer ${
+                            selected
+                              ? 'bg-sky-50/70 border-[#0090e7] text-slate-900 shadow-xs ring-1 ring-[#0090e7]/40'
+                              : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50/60'
+                          }`}
+                        >
+                          <div
+                            className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 transition ${
+                              selected ? 'bg-[#0090e7] text-white' : 'border border-slate-400 bg-white'
+                            }`}
+                          >
+                            {selected && (
+                              <svg className="w-2.5 h-2.5 fill-current" viewBox="0 0 20 20">
+                                <path
+                                  fillRule="evenodd"
+                                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                            )}
+                          </div>
+                          <span className={selected ? 'font-semibold text-slate-900' : 'text-slate-700'}>
+                            {symptom}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 

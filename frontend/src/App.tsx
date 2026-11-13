@@ -102,6 +102,10 @@ export function App() {
                 onNavigateToNotes={() => setActiveTab('clinical-notes')}
                 onNavigateToBilling={() => setActiveTab('billing')}
                 onNavigateToPharmacy={() => setActiveTab('pharmacy')}
+                onNavigateToAppointment={(patientId) => {
+                  if (patientId) setSelectedPatientNav(patientId);
+                  setActiveTab('appointments');
+                }}
               />
             )}
             {activeTab === 'appointments' && (

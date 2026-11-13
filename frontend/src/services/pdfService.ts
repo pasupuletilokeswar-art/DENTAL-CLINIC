@@ -7,7 +7,39 @@ import autoTable from 'jspdf-autotable';
 export const generatePatientReportPDF = (patientProfile: any) => {
   const doc = new jsPDF();
   const p = patientProfile.patient;
-  const fin = patientProfile.financialSummary;
+  const fin = patientProfile.financialSummary || {
+    totalOutstanding: 0,
+    consultationPending: 0,
+    pharmacyPending: 0,
+    operationPending: 0,
+  };
+
+  const formatDateSafe = (d: any) => {
+    if (!d) return '—';
+    try {
+      const str = String(d).substring(0, 10);
+      if (str.includes('-')) {
+        const [y, m, day] = str.split('-').map(Number);
+        return new Date(y, m - 1, day).toLocaleDateString(undefined, {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+        });
+      }
+      return new Date(d).toLocaleDateString();
+    } catch {
+      return String(d).substring(0, 10);
+    }
+  };
+
+  const formatTimeSafe = (d: any) => {
+    if (!d) return '—';
+    try {
+      return new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '—';
+    }
+  };
 
   // Header Banner
   doc.setFillColor(15, 23, 42); // slate-900
@@ -39,7 +71,7 @@ export const generatePatientReportPDF = (patientProfile: any) => {
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(71, 85, 105);
   doc.text(`Age: ${p.age} yrs | Gender: ${p.gender} | Mobile: ${p.mobile}`, 18, 54);
-  doc.text(`Address: ${p.address || 'N/A'} | Registered: ${new Date(p.registrationDate).toLocaleDateString()}`, 18, 60);
+  doc.text(`Address: ${p.address || 'N/A'} | Registered: ${formatDateSafe(p.registrationDate)}`, 18, 60);
 
   if (p.medicalAlerts) {
     doc.setTextColor(185, 28, 28); // red
@@ -69,8 +101,8 @@ export const generatePatientReportPDF = (patientProfile: any) => {
 
   const aptRows = (p.appointments || []).map((apt: any) => [
     apt.appointmentCode || 'APT',
-    new Date(apt.appointmentDate).toISOString().substring(0, 10),
-    new Date(apt.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    formatDateSafe(apt.appointmentDate),
+    formatTimeSafe(apt.startTime),
     `Dr. ${apt.doctor?.user?.fullName || 'Doctor'}`,
     apt.specialization || 'DENTAL',
     apt.procedureName || apt.visitType || 'General',
@@ -99,7 +131,7 @@ export const generatePatientReportPDF = (patientProfile: any) => {
   doc.text('Clinical Notes & Doctor Diagnoses', 14, currentY);
 
   const notesRows = (p.clinicalNotes || []).map((cn: any) => [
-    new Date(cn.consultationDate).toLocaleDateString(),
+    formatDateSafe(cn.consultationDate),
     `Dr. ${cn.doctor?.user?.fullName || 'Doctor'}`,
     cn.chiefComplaints || '-',
     cn.diagnosis || '-',
@@ -117,14 +149,50 @@ export const generatePatientReportPDF = (patientProfile: any) => {
 
   currentY = (doc as any).lastAutoTable.finalY + 10;
 
-  // 3. Consultation Invoices Table
+  // 3. Clinical Procedures History Table (All procedures with tooth numbers)
+  if (currentY > 220) {
+    doc.addPage();
+    currentY = 20;
+  }
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
-  doc.text('Consultation Bills & Payments', 14, currentY);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Dental & Surgical Procedures History', 14, currentY);
+
+  const allProcRows = (p.procedures || []).map((pr: any) => [
+    formatDateSafe(pr.procedureDate),
+    pr.procedureName || pr.procedureMaster?.name || 'Procedure',
+    `Dr. ${pr.doctor?.user?.fullName || pr.dentistName || 'Dentist'}`,
+    pr.toothNumber ? `Tooth #${pr.toothNumber}` : '—',
+    pr.clinicalNotes || '—',
+    (pr.status || 'PLANNED').toUpperCase(),
+    pr.operationInvoice ? `Rs. ${pr.operationInvoice.totalAmount} (${pr.operationInvoice.paymentStatus})` : '—',
+  ]);
+
+  autoTable(doc, {
+    startY: currentY + 3,
+    head: [['Date', 'Procedure', 'Dentist', 'Tooth #', 'Clinical Notes', 'Status', 'Bill Status']],
+    body: allProcRows.length > 0 ? allProcRows : [['No procedures recorded yet', '', '', '', '', '', '']],
+    theme: 'grid',
+    headStyles: { fillColor: [59, 130, 246], textColor: 255, fontStyle: 'bold' },
+    styles: { fontSize: 8, cellPadding: 2 },
+  });
+
+  currentY = (doc as any).lastAutoTable.finalY + 10;
+
+  // 4. Consultation Invoices Table
+  if (currentY > 220) {
+    doc.addPage();
+    currentY = 20;
+  }
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text('Consultation Bills & Invoices', 14, currentY);
 
   const billsRows = (p.consultationBills || []).map((b: any) => [
     b.invoiceNumber,
-    new Date(b.billDate).toLocaleDateString(),
+    formatDateSafe(b.billDate),
     `Dr. ${b.doctor?.user?.fullName || 'Doctor'}`,
     `Rs. ${b.consultationFee}`,
     `Rs. ${b.totalAmount}`,
@@ -144,7 +212,7 @@ export const generatePatientReportPDF = (patientProfile: any) => {
 
   currentY = (doc as any).lastAutoTable.finalY + 10;
 
-  // 3. Operation / Procedure Invoices Table
+  // 5. Pharmacy Dispensed Sales
   if (currentY > 220) {
     doc.addPage();
     currentY = 20;
@@ -152,45 +220,13 @@ export const generatePatientReportPDF = (patientProfile: any) => {
 
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
-  doc.text('Procedures & Minor OT Bills', 14, currentY);
-
-  const procRows = (p.procedures || [])
-    .filter((pr: any) => pr.operationInvoice)
-    .map((pr: any) => [
-      pr.operationInvoice.invoiceNumber,
-      pr.procedureName || pr.procedureMaster?.name || 'Procedure',
-      `Dr. ${pr.doctor?.user?.fullName || pr.dentistName || 'Surgeon'}`,
-      `Rs. ${pr.operationInvoice.totalAmount}`,
-      `Rs. ${pr.operationInvoice.paidAmount}`,
-      `Rs. ${pr.operationInvoice.pendingBalance}`,
-      pr.operationInvoice.paymentStatus,
-    ]);
-
-  autoTable(doc, {
-    startY: currentY + 3,
-    head: [['OT Invoice #', 'Procedure', 'Doctor', 'Total', 'Paid', 'Due', 'Status']],
-    body: procRows.length > 0 ? procRows : [['No procedure invoices generated yet', '', '', '', '', '', '']],
-    theme: 'grid',
-    headStyles: { fillColor: [180, 83, 9], textColor: 255, fontStyle: 'bold' },
-    styles: { fontSize: 8, cellPadding: 2 },
-  });
-
-  currentY = (doc as any).lastAutoTable.finalY + 10;
-
-  // 4. Pharmacy Dispensed Sales
-  if (currentY > 230) {
-    doc.addPage();
-    currentY = 20;
-  }
-
-  doc.setFontSize(11);
-  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
   doc.text('Pharmacy Medication Dispensed', 14, currentY);
 
   const pharmRows = (p.pharmacySales || []).map((s: any) => [
     s.invoiceNumber,
-    new Date(s.saleDate).toLocaleDateString(),
-    s.items.map((it: any) => `${it.medicine?.medicineName || 'Med'} (x${it.quantity})`).join(', '),
+    formatDateSafe(s.saleDate),
+    (s.items || []).map((it: any) => `${it.medicine?.medicineName || 'Med'} (x${it.quantity})`).join(', ') || '—',
     `Rs. ${s.grandTotal}`,
     `Rs. ${s.paidAmount}`,
     s.paymentStatus,
