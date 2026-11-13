@@ -119,10 +119,19 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
     socket.on('billing:payment-received', () => {
       if (selectedPatientId) fetchProfile(selectedPatientId);
     });
+    const handleProcedureUpdate = () => {
+      if (selectedPatientId) fetchProfile(selectedPatientId);
+    };
+    socket.on('procedure:created', handleProcedureUpdate);
+    socket.on('procedure:scheduled', handleProcedureUpdate);
+    socket.on('procedure:completed', handleProcedureUpdate);
 
     return () => {
       socket.off('patient:registered', handlePatientUpdate);
       socket.off('patient:updated', handlePatientUpdate);
+      socket.off('procedure:created', handleProcedureUpdate);
+      socket.off('procedure:scheduled', handleProcedureUpdate);
+      socket.off('procedure:completed', handleProcedureUpdate);
     };
   }, [selectedPatientId]);
 
@@ -178,7 +187,11 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
       });
       fetchPatients();
     } catch (err: any) {
-      setFormError(err.response?.data?.message || 'Error saving patient details');
+      const msg =
+        err.response?.data?.message ||
+        err.response?.data?.errors?.[0]?.message ||
+        'Error saving patient details';
+      setFormError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -217,6 +230,7 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
         <button
           onClick={() => {
             setEditingPatient(null);
+            setFormError('');
             setFormData({
               name: '',
               mobile: '',
@@ -380,7 +394,7 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
                     <div className="p-3 bg-slate-50 rounded-xl">
                       <span className="text-[10px] text-slate-500 uppercase font-semibold block">Procedures</span>
                       <span className="text-xs font-bold text-slate-800">
-                        {patientProfile.patient.procedures.length} Scheduled
+                        {patientProfile.patient.procedures?.length || 0} Recorded
                       </span>
                     </div>
                   </div>
@@ -471,7 +485,110 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
                     )}
                   </div>
 
-                  {/* 3. Consultation Bills & Receipts */}
+                  {/* 3. Procedure History */}
+                  <div className="pt-4 border-t border-slate-100">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                        <Scissors className="w-4 h-4 text-blue-600" />
+                        <span>Procedure History ({patientProfile.patient.procedures?.length || 0})</span>
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-medium">Chronological treatment log</span>
+                    </div>
+
+                    {!patientProfile.patient.procedures || patientProfile.patient.procedures.length === 0 ? (
+                      <p className="text-xs text-slate-400 py-2">No procedure history recorded for this patient yet.</p>
+                    ) : (
+                      <div className="overflow-x-auto rounded-xl border border-slate-200 mt-2">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                            <tr>
+                              <th className="p-2.5 pl-3">Date</th>
+                              <th className="p-2.5">Procedure</th>
+                              <th className="p-2.5">Dentist</th>
+                              <th className="p-2.5">Tooth #</th>
+                              <th className="p-2.5">Description</th>
+                              <th className="p-2.5 pr-3">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {[...(patientProfile.patient.procedures || [])]
+                              .sort(
+                                (a: any, b: any) =>
+                                  new Date(a.procedureDate).getTime() - new Date(b.procedureDate).getTime()
+                              )
+                              .map((proc: any) => {
+                                const procName = proc.procedureName || proc.procedureMaster?.name || 'Procedure';
+                                const dentist = proc.doctor?.user?.fullName || proc.dentistName || 'Dentist';
+                                const rawStatus = (proc.status || '').toUpperCase().replace(/[\s-]+/g, '_');
+                                let statusLabel = 'Planned';
+                                let statusStyle = 'bg-blue-50 text-blue-700 border-blue-200';
+                                if (rawStatus === 'COMPLETED') {
+                                  statusLabel = 'Completed';
+                                  statusStyle = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                                } else if (rawStatus === 'IN_PROGRESS') {
+                                  statusLabel = 'In Progress';
+                                  statusStyle = 'bg-amber-50 text-amber-700 border-amber-200';
+                                }
+
+                                const d = new Date(proc.procedureDate);
+                                const months = [
+                                  'Jan',
+                                  'Feb',
+                                  'Mar',
+                                  'Apr',
+                                  'May',
+                                  'Jun',
+                                  'Jul',
+                                  'Aug',
+                                  'Sep',
+                                  'Oct',
+                                  'Nov',
+                                  'Dec',
+                                ];
+                                const formattedDate = isNaN(d.getTime())
+                                  ? '—'
+                                  : `${d.getDate().toString().padStart(2, '0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+
+                                return (
+                                  <tr key={proc.id} className="hover:bg-slate-50/70 transition">
+                                    <td className="p-2.5 pl-3 font-medium text-slate-700 whitespace-nowrap">
+                                      {formattedDate}
+                                    </td>
+                                    <td className="p-2.5 font-bold text-slate-900">{procName}</td>
+                                    <td className="p-2.5 text-slate-700">{dentist}</td>
+                                    <td className="p-2.5 font-mono font-semibold text-slate-800">
+                                      {proc.toothNumber ? (
+                                        <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[11px] border border-slate-200">
+                                          {proc.toothNumber}
+                                        </span>
+                                      ) : (
+                                        <span className="text-slate-400 font-normal">—</span>
+                                      )}
+                                    </td>
+                                    <td className="p-2.5 text-slate-600 max-w-xs">
+                                      {proc.clinicalNotes ? (
+                                        <span className="line-clamp-2">{proc.clinicalNotes}</span>
+                                      ) : (
+                                        <span className="text-slate-400 italic">None</span>
+                                      )}
+                                    </td>
+                                    <td className="p-2.5 pr-3">
+                                      <span
+                                        className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${statusStyle}`}
+                                      >
+                                        {statusLabel}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 4. Consultation Bills & Receipts */}
                   <div className="pt-4 border-t border-slate-100">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2 mb-2">
                       <CreditCard className="w-4 h-4 text-emerald-600" />

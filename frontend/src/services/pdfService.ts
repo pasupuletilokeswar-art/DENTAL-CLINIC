@@ -127,8 +127,8 @@ export const generatePatientReportPDF = (patientProfile: any) => {
     .filter((pr: any) => pr.operationInvoice)
     .map((pr: any) => [
       pr.operationInvoice.invoiceNumber,
-      pr.procedureMaster.name,
-      `Dr. ${pr.doctor?.user?.fullName || 'Surgeon'}`,
+      pr.procedureName || pr.procedureMaster?.name || 'Procedure',
+      `Dr. ${pr.doctor?.user?.fullName || pr.dentistName || 'Surgeon'}`,
       `Rs. ${pr.operationInvoice.totalAmount}`,
       `Rs. ${pr.operationInvoice.paidAmount}`,
       `Rs. ${pr.operationInvoice.pendingBalance}`,

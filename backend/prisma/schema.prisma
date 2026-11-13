@@ -60,6 +60,7 @@ enum PaymentStatus {
 }
 
 enum ProcedureStatus {
+  PLANNED
   SCHEDULED
   IN_PROGRESS
   COMPLETED
@@ -229,20 +230,23 @@ model ProcedureMaster {
 }
 
 model Procedure {
-  id                 String          @id @default(uuid())
-  procedureCode      String          @unique // PROC-2026-00001
+  id                 String           @id @default(uuid())
+  procedureCode      String           @unique // PROC-2026-00001
   patientId          String
-  patient            Patient         @relation(fields: [patientId], references: [id])
-  doctorId           String
-  doctor             Doctor          @relation(fields: [doctorId], references: [id])
-  procedureMasterId  String
-  procedureMaster    ProcedureMaster @relation(fields: [procedureMasterId], references: [id])
+  patient            Patient          @relation(fields: [patientId], references: [id])
+  doctorId           String?
+  doctor             Doctor?          @relation(fields: [doctorId], references: [id])
+  dentistName        String?
+  procedureMasterId  String?
+  procedureMaster    ProcedureMaster? @relation(fields: [procedureMasterId], references: [id])
+  procedureName      String?
+  toothNumber        String?
   procedureDate      DateTime
-  charges            Float
-  status             ProcedureStatus @default(SCHEDULED)
+  charges            Float            @default(0.0)
+  status             ProcedureStatus  @default(PLANNED)
   clinicalNotes      String?
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   operationInvoice   OperationBill?
 

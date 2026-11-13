@@ -18,12 +18,16 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    if (
+      error.response?.status === 401 ||
+      (error.response?.status === 403 &&
+        (error.response?.data?.message?.includes('token') ||
+          error.response?.data?.message?.includes('Authentication') ||
+          error.response?.data?.message?.includes('required')))
+    ) {
       localStorage.removeItem('clinic_token');
       localStorage.removeItem('clinic_user');
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login';
-      }
+      window.location.reload();
     }
     return Promise.reject(error);
   }

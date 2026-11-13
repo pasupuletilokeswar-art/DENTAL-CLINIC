@@ -138,12 +138,16 @@ export interface Procedure {
   procedureCode: string;
   patientId: string;
   patient: Patient;
-  doctorId: string;
-  doctor: Doctor;
-  procedureMaster: ProcedureMaster;
+  doctorId?: string | null;
+  doctor?: Doctor | null;
+  dentistName?: string | null;
+  procedureMasterId?: string | null;
+  procedureMaster?: ProcedureMaster | null;
+  procedureName?: string | null;
+  toothNumber?: string | null;
   procedureDate: string;
   charges: number;
-  status: 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+  status: 'PLANNED' | 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
   clinicalNotes?: string | null;
   operationInvoice?: {
     id: string;
