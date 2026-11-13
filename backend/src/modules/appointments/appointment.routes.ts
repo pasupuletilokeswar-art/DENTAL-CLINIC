@@ -19,6 +19,26 @@ const appointmentSchema = z.object({
   reasonForVisit: z.string().optional(),
 });
 
+// Helper to parse pure calendar date into UTC midnight
+function parseCalendarDateUTC(dateStr: string): { start: Date; end: Date; exact: Date } {
+  let year: number, month: number, day: number;
+  if (dateStr.includes('-')) {
+    const parts = dateStr.split('T')[0].split('-').map(Number);
+    year = parts[0];
+    month = parts[1] - 1;
+    day = parts[2];
+  } else {
+    const d = new Date(dateStr);
+    year = d.getFullYear();
+    month = d.getMonth();
+    day = d.getDate();
+  }
+  const exact = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+  const start = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+  const end = new Date(Date.UTC(year, month, day + 1, 0, 0, 0, 0));
+  return { start, end, exact };
+}
+
 // Auto generate appointment code: APT-2026-00001
 async function generateAppointmentCode(): Promise<string> {
   const currentYear = new Date().getFullYear();
@@ -32,6 +52,32 @@ async function generateAppointmentCode(): Promise<string> {
   const seq = parseInt(lastApt.appointmentCode.split('-')[2] || '0', 10) + 1;
   return `${prefix}${seq.toString().padStart(5, '0')}`;
 }
+
+// GET /api/appointments/patient-active/:patientId - Check if patient already has an active appointment
+router.get('/patient-active/:patientId', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const { patientId } = req.params;
+    const activeAppointment = await prisma.appointment.findFirst({
+      where: {
+        patientId,
+        status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.IN_PROGRESS] },
+      },
+      include: {
+        doctor: { include: { user: { select: { fullName: true } } } },
+        patient: { select: { id: true, name: true, patientCode: true } },
+      },
+      orderBy: { appointmentDate: 'asc' },
+    });
+
+    res.json({
+      success: true,
+      hasActiveAppointment: !!activeAppointment,
+      activeAppointment: activeAppointment || null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // GET /api/appointments/calendar-summary - Summary counts per day for month calendar view
 router.get('/calendar-summary', authenticateToken, async (req: Request, res: Response) => {
@@ -74,7 +120,10 @@ router.get('/calendar-summary', authenticateToken, async (req: Request, res: Res
     const summary: Record<string, { total: number; dental: number; ortho: number; completed: number }> = {};
 
     for (const apt of appointments) {
-      const key = apt.appointmentDate.toISOString().substring(0, 10);
+      const year = apt.appointmentDate.getUTCFullYear();
+      const month = String(apt.appointmentDate.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(apt.appointmentDate.getUTCDate()).padStart(2, '0');
+      const key = `${year}-${month}-${day}`;
       if (!summary[key]) {
         summary[key] = { total: 0, dental: 0, ortho: 0, completed: 0 };
       }
@@ -98,15 +147,12 @@ router.get('/busy-slots', authenticateToken, async (req: Request, res: Response)
       return res.status(400).json({ success: false, message: 'doctorId and date are required' });
     }
 
-    const d = new Date(date);
-    d.setHours(0, 0, 0, 0);
-    const nextDay = new Date(d);
-    nextDay.setDate(nextDay.getDate() + 1);
+    const { start, end } = parseCalendarDateUTC(date);
 
     const appointments = await prisma.appointment.findMany({
       where: {
         doctorId,
-        appointmentDate: { gte: d, lt: nextDay },
+        appointmentDate: { gte: start, lt: end },
         status: { notIn: [AppointmentStatus.CANCELLED] },
       },
       select: {
@@ -142,11 +188,8 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
       where.status = status;
     }
     if (date && typeof date === 'string') {
-      const d = new Date(date);
-      d.setHours(0, 0, 0, 0);
-      const nextDay = new Date(d);
-      nextDay.setDate(nextDay.getDate() + 1);
-      where.appointmentDate = { gte: d, lt: nextDay };
+      const { start, end } = parseCalendarDateUTC(date);
+      where.appointmentDate = { gte: start, lt: end };
     }
 
     const appointments = await prisma.appointment.findMany({
@@ -170,28 +213,46 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/appointments - Book new appointment with overlap conflict prevention
+// POST /api/appointments - Book new appointment with duplicate prevention and overlap conflict check
 router.post('/', authenticateToken, async (req: Request, res: Response) => {
   try {
     const data = appointmentSchema.parse(req.body);
 
+    // 1. Prevent duplicate active appointments for the same patient
+    const activeAppointment = await prisma.appointment.findFirst({
+      where: {
+        patientId: data.patientId,
+        status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.IN_PROGRESS] },
+      },
+      include: {
+        doctor: { include: { user: { select: { fullName: true } } } },
+        patient: { select: { name: true, patientCode: true } },
+      },
+    });
+
+    if (activeAppointment) {
+      const aptDateFormatted = activeAppointment.appointmentDate.toISOString().substring(0, 10);
+      const aptTimeFormatted = new Date(activeAppointment.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return res.status(409).json({
+        success: false,
+        code: 'ACTIVE_APPOINTMENT_EXISTS',
+        activeAppointment,
+        message: `Patient ${activeAppointment.patient.name} already has an active appointment (${activeAppointment.appointmentCode}) on ${aptDateFormatted} at ${aptTimeFormatted} with Dr. ${activeAppointment.doctor.user.fullName}. Please reschedule instead of booking a duplicate.`,
+      });
+    }
+
     const startDateTime = new Date(data.startTime);
     const endDateTime = new Date(startDateTime.getTime() + data.durationMinutes * 60 * 1000);
-    const aptDate = new Date(data.appointmentDate);
+    const { exact: aptDate } = parseCalendarDateUTC(data.appointmentDate);
 
-    // Overlap conflict detection for the doctor
+    // 2. Overlap conflict detection for the doctor
     const overlappingAppointment = await prisma.appointment.findFirst({
       where: {
         doctorId: data.doctorId,
         status: { notIn: [AppointmentStatus.CANCELLED] },
-        OR: [
-          {
-            // Case 1: Existing appointment starts before new end and ends after new start
-            AND: [
-              { startTime: { lt: endDateTime } },
-              { endTime: { gt: startDateTime } },
-            ],
-          },
+        AND: [
+          { startTime: { lt: endDateTime } },
+          { endTime: { gt: startDateTime } },
         ],
       },
       include: {
@@ -202,6 +263,7 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
     if (overlappingAppointment) {
       return res.status(409).json({
         success: false,
+        code: 'DOCTOR_SLOT_CONFLICT',
         message: `Doctor already has an overlapping appointment with ${overlappingAppointment.patient.name} from ${new Date(
           overlappingAppointment.startTime
         ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} to ${new Date(
@@ -244,6 +306,85 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ success: false, errors: err.errors });
     }
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// PATCH /api/appointments/:id/reschedule - Reschedule an existing appointment
+router.patch('/:id/reschedule', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { appointmentDate, startTime, durationMinutes = 30, reason } = req.body;
+
+    if (!appointmentDate || !startTime) {
+      return res.status(400).json({ success: false, message: 'appointmentDate and startTime are required' });
+    }
+
+    const existingApt = await prisma.appointment.findUnique({
+      where: { id },
+      include: { doctor: { include: { user: { select: { fullName: true } } } } },
+    });
+
+    if (!existingApt) {
+      return res.status(404).json({ success: false, message: 'Appointment not found' });
+    }
+
+    const startDateTime = new Date(startTime);
+    const endDateTime = new Date(startDateTime.getTime() + durationMinutes * 60 * 1000);
+    const { exact: aptDate } = parseCalendarDateUTC(appointmentDate);
+
+    // Overlap conflict detection for the doctor (excluding this appointment)
+    const overlapping = await prisma.appointment.findFirst({
+      where: {
+        id: { not: id },
+        doctorId: existingApt.doctorId,
+        status: { notIn: [AppointmentStatus.CANCELLED] },
+        AND: [
+          { startTime: { lt: endDateTime } },
+          { endTime: { gt: startDateTime } },
+        ],
+      },
+      include: {
+        patient: { select: { name: true } },
+      },
+    });
+
+    if (overlapping) {
+      return res.status(409).json({
+        success: false,
+        message: `Doctor already has an overlapping appointment with ${overlapping.patient.name} from ${new Date(
+          overlapping.startTime
+        ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} to ${new Date(
+          overlapping.endTime
+        ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      });
+    }
+
+    const updated = await prisma.appointment.update({
+      where: { id },
+      data: {
+        appointmentDate: aptDate,
+        startTime: startDateTime,
+        endTime: endDateTime,
+        durationMinutes,
+        status: AppointmentStatus.SCHEDULED,
+        reasonForVisit: reason ? `${existingApt.reasonForVisit || ''} [Rescheduled: ${reason}]`.trim() : existingApt.reasonForVisit,
+      },
+      include: {
+        patient: true,
+        doctor: { include: { user: { select: { fullName: true } } } },
+      },
+    });
+
+    emitRealtimeEvent('appointment:updated', updated);
+    emitRealtimeEvent('appointment:rescheduled', updated);
+
+    res.json({
+      success: true,
+      message: `Appointment ${updated.appointmentCode} successfully rescheduled to ${appointmentDate}`,
+      appointment: updated,
+    });
+  } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
 });

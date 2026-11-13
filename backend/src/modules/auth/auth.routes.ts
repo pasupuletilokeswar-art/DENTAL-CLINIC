@@ -226,15 +226,131 @@ router.post('/admin/users', authenticateToken, async (req: AuthRequest, res: Res
   }
 });
 
-// DELETE /api/auth/admin/users/:id - Deactivate or remove user
+// PUT /api/auth/admin/users/:id - Edit user and doctor profile
+const updateUserSchema = z.object({
+  fullName: z.string().min(2, 'Full name is required').optional(),
+  email: z.string().email().optional().or(z.literal('')).nullable(),
+  phone: z.string().optional().or(z.literal('')).nullable(),
+  role: z.enum(['RECEPTIONIST', 'DOCTOR_DENTAL', 'DOCTOR_ORTHO', 'ADMIN']).optional(),
+  isActive: z.boolean().optional(),
+  password: z.string().min(4).optional().or(z.literal('')),
+  specialization: z.enum(['DENTAL', 'ORTHOPEDIC']).optional().nullable(),
+  consultationFee: z.number().min(0).optional(),
+  licenseNumber: z.string().optional().nullable(),
+});
+
+router.put('/admin/users/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const data = updateUserSchema.parse(req.body);
+
+    const user = await prisma.user.findUnique({
+      where: { id },
+      include: { doctorProfile: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const updateData: any = {};
+    if (data.fullName !== undefined) updateData.fullName = data.fullName;
+    if (data.email !== undefined) updateData.email = data.email || null;
+    if (data.phone !== undefined) updateData.phone = data.phone || null;
+    if (data.role !== undefined) updateData.role = data.role as Role;
+    if (data.isActive !== undefined) updateData.isActive = data.isActive;
+    if (data.password && data.password.trim().length >= 4) {
+      updateData.passwordHash = await bcrypt.hash(data.password.trim(), 10);
+    }
+
+    const updatedUser = await prisma.$transaction(async (tx) => {
+      const u = await tx.user.update({
+        where: { id },
+        data: updateData,
+      });
+
+      // Update doctor profile if doctor
+      if (u.role === 'DOCTOR_DENTAL' || u.role === 'DOCTOR_ORTHO') {
+        const spec = data.specialization || (u.role === 'DOCTOR_DENTAL' ? Specialization.DENTAL : Specialization.ORTHOPEDIC);
+        const fee = data.consultationFee !== undefined ? Number(data.consultationFee) : (spec === 'DENTAL' ? 600 : 800);
+
+        if (user.doctorProfile) {
+          await tx.doctor.update({
+            where: { id: user.doctorProfile.id },
+            data: {
+              specialization: spec,
+              consultationFee: fee,
+              licenseNumber: data.licenseNumber !== undefined ? data.licenseNumber : user.doctorProfile.licenseNumber,
+            },
+          });
+        } else {
+          await tx.doctor.create({
+            data: {
+              userId: u.id,
+              specialization: spec,
+              consultationFee: fee,
+              licenseNumber: data.licenseNumber || null,
+            },
+          });
+        }
+      }
+
+      return tx.user.findUnique({
+        where: { id },
+        include: { doctorProfile: true },
+      });
+    });
+
+    res.json({
+      success: true,
+      message: `User ${updatedUser?.fullName} updated successfully`,
+      user: updatedUser,
+    });
+  } catch (err: any) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ success: false, errors: err.errors });
+    }
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// DELETE /api/auth/admin/users/:id - Delete or safely deactivate user
 router.delete('/admin/users/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    await prisma.user.update({
+
+    // Prevent deleting oneself
+    if (req.user?.id === id) {
+      return res.status(400).json({ success: false, message: 'You cannot delete your own active administrator account.' });
+    }
+
+    const user = await prisma.user.findUnique({
       where: { id },
-      data: { isActive: false },
+      include: { doctorProfile: true },
     });
-    res.json({ success: true, message: 'User deactivated' });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Try hard delete first; if foreign key constraint exists, fallback to deactivation
+    try {
+      if (user.doctorProfile) {
+        await prisma.doctor.delete({ where: { id: user.doctorProfile.id } });
+      }
+      await prisma.user.delete({ where: { id } });
+      return res.json({ success: true, message: `User ${user.fullName} permanently deleted.` });
+    } catch (fkErr) {
+      // Linked clinical records exist - deactivate safely
+      await prisma.user.update({
+        where: { id },
+        data: { isActive: false },
+      });
+      return res.json({
+        success: true,
+        message: `User ${user.fullName} has historical clinical records, so the account was safely deactivated.`,
+      });
+    }
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
