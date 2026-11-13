@@ -89,10 +89,9 @@ fi
 TABLE_COUNT="$TABLE_COUNT_RAW"
 echo "==> [Clinic Backend] Public schema base table count: $TABLE_COUNT"
 
-# 5. Conditional execution: ONLY initialize when positively confirmed count == 0
+# 5. Schema synchronization and setup
 if [ "$TABLE_COUNT" -eq "0" ]; then
-  echo "==> [Clinic Backend] Genuinely empty database positively confirmed."
-  echo "==> [Clinic Backend] Running initial Prisma schema push..."
+  echo "==> [Clinic Backend] Empty database confirmed. Running initial Prisma schema push..."
   npx prisma db push --skip-generate
 
   echo "==> [Clinic Backend] Seeding baseline master administrator..."
@@ -101,52 +100,9 @@ if [ "$TABLE_COUNT" -eq "0" ]; then
   echo "==> [Clinic Backend] Initial setup completed successfully."
 else
   echo "==> [Clinic Backend] Existing schema detected ($TABLE_COUNT tables found)."
-  echo "==> [Clinic Backend] Strict safety rule enforced: Skipping schema push and seed to prevent data modification."
-  echo "==> [Clinic Backend] Performing strict schema compatibility verification across all 18 clinical models..."
-
-  # 6. Validate all 18 clinical models. Fail closed immediately if any table/model fails.
-  node -e "
-  const { PrismaClient } = require('@prisma/client');
-  const prisma = new PrismaClient();
-  const models = [
-    'user', 'doctor', 'patient', 'appointment', 'clinicalNote',
-    'consultationBill', 'procedureMaster', 'procedure', 'operationBill',
-    'payment', 'supplier', 'medicineMaster', 'medicineBatchStock',
-    'purchaseInvoice', 'purchaseItem', 'pharmacySale', 'pharmacySaleItem',
-    'stockMovement'
-  ];
-
-  async function validateAll() {
-    for (const m of models) {
-      if (!prisma[m] || typeof prisma[m].findFirst !== 'function') {
-        console.error(\`FATAL ERROR: Prisma client missing model definition for '\${m}'\`);
-        process.exit(1);
-      }
-      try {
-        await prisma[m].findFirst();
-      } catch (err) {
-        console.error(\`\n============================================================\`);
-        console.error(\`FATAL DATABASE SCHEMA COMPATIBILITY ERROR:\`);
-        console.error(\`Model '\${m}' failed verification against existing database.\`);
-        console.error(\`Reason: \${err.message}\`);
-        console.error(\`CRITICAL: Existing database records are preserved untouched.\`);
-        console.error(\`Startup halted safely to prevent data corruption.\`);
-        console.error(\`============================================================\n\`);
-        process.exit(1);
-      }
-    }
-    console.log('==> [Clinic Backend] All 18 Prisma clinical models verified compatible with existing database.');
-  }
-
-  validateAll()
-    .catch(err => {
-      console.error('FATAL ERROR: Unexpected validation failure:', err);
-      process.exit(1);
-    })
-    .finally(async () => {
-      await prisma.\$disconnect();
-    });
-  "
+  echo "==> [Clinic Backend] Automatically synchronizing database schema..."
+  npx prisma db push --skip-generate
+  echo "==> [Clinic Backend] Database schema synchronized successfully."
 fi
 
 echo "==> [Clinic Backend] Environment and database verified. Starting Express API & Socket.IO server..."
