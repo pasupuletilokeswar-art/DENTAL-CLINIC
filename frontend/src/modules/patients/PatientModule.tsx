@@ -1060,70 +1060,141 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
                         <span className="text-xs font-bold text-slate-700">
                           Dental & Clinical Procedures ({patientProfile.patient.procedures?.length || 0})
                         </span>
+                        <span className="text-[10px] text-slate-400 font-medium">Grouped by visit date (chronological)</span>
                       </div>
 
-                      {(!patientProfile.patient.procedures || patientProfile.patient.procedures.length === 0) ? (
+                      {!patientProfile.patient.procedures || patientProfile.patient.procedures.length === 0 ? (
                         <div className="p-8 text-center text-xs text-slate-400 bg-white rounded-xl border border-slate-200">
                           No clinical procedures recorded for this patient yet.
                         </div>
                       ) : (
-                        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
-                          <table className="w-full text-left text-xs">
-                            <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
-                              <tr>
-                                <th className="p-3 pl-4">Date</th>
-                                <th className="p-3">Procedure</th>
-                                <th className="p-3">Dentist</th>
-                                <th className="p-3">Tooth #</th>
-                                <th className="p-3">Clinical Notes</th>
-                                <th className="p-3 pr-4">Status</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                              {patientProfile.patient.procedures.map((proc: any) => {
-                                const procName = proc.procedureName || proc.procedureMaster?.name || 'Procedure';
-                                const dentist = proc.doctor?.user?.fullName || proc.dentistName || 'Dentist';
-                                const rawStatus = (proc.status || '').toUpperCase();
-                                let statusStyle = 'bg-blue-50 text-blue-700 border-blue-200';
-                                if (rawStatus === 'COMPLETED') {
-                                  statusStyle = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-                                } else if (rawStatus === 'IN_PROGRESS') {
-                                  statusStyle = 'bg-amber-50 text-amber-700 border-amber-200';
-                                }
+                        <div className="space-y-3 mt-2">
+                          {(() => {
+                            const procs = patientProfile.patient.procedures || [];
+                            // Group by visit date
+                            const dateMap = new Map<string, any[]>();
+                            const sorted = [...procs].sort(
+                              (a: any, b: any) =>
+                                new Date(b.procedureDate).getTime() - new Date(a.procedureDate).getTime()
+                            );
 
-                                return (
-                                  <tr key={proc.id} className="hover:bg-slate-50/70 transition">
-                                    <td className="p-3 pl-4 font-semibold text-slate-800 whitespace-nowrap">
-                                      {formatDateStr(proc.procedureDate)}
-                                    </td>
-                                    <td className="p-3 font-bold text-slate-900">{procName}</td>
-                                    <td className="p-3 text-slate-700">{dentist}</td>
-                                    <td className="p-3 font-mono font-semibold text-slate-800">
-                                      {proc.toothNumber ? (
-                                        <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[11px] border border-slate-200">
-                                          #{proc.toothNumber}
-                                        </span>
-                                      ) : (
-                                        <span className="text-slate-400 font-normal">—</span>
-                                      )}
-                                    </td>
-                                    <td className="p-3 text-slate-600 max-w-xs">
-                                      {proc.clinicalNotes ? (
-                                        <span>{proc.clinicalNotes}</span>
-                                      ) : (
-                                        <span className="text-slate-400 italic">None</span>
-                                      )}
-                                    </td>
-                                    <td className="p-3 pr-4">
-                                      <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${statusStyle}`}>
-                                        {proc.status}
+                            sorted.forEach((p) => {
+                              const d = new Date(p.procedureDate);
+                              const key = isNaN(d.getTime()) ? 'Unspecified Date' : d.toISOString().substring(0, 10);
+                              if (!dateMap.has(key)) dateMap.set(key, []);
+                              dateMap.get(key)!.push(p);
+                            });
+
+                            const months = [
+                              'Jan',
+                              'Feb',
+                              'Mar',
+                              'Apr',
+                              'May',
+                              'Jun',
+                              'Jul',
+                              'Aug',
+                              'Sep',
+                              'Oct',
+                              'Nov',
+                              'Dec',
+                            ];
+
+                            return Array.from(dateMap.entries()).map(([dateKey, visitProcs]) => {
+                              const d = new Date(dateKey);
+                              const formattedDate = isNaN(d.getTime())
+                                ? dateKey
+                                : `${d.getDate().toString().padStart(2, '0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+
+                              const dentist =
+                                visitProcs[0]?.doctor?.user?.fullName || visitProcs[0]?.dentistName || 'Assigned Dentist';
+
+                              return (
+                                <div
+                                  key={dateKey}
+                                  className="rounded-xl border border-slate-200 overflow-hidden bg-white shadow-xs"
+                                >
+                                  <div className="bg-slate-50 px-3 py-2 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2">
+                                      <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                                      <span className="font-bold text-xs text-slate-800">
+                                        Visit Date: {formattedDate}
                                       </span>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
+                                      <span className="text-slate-400 text-[11px]">|</span>
+                                      <span className="text-xs text-slate-600 font-medium">
+                                        Dr. {dentist.replace(/^Dr\.?\s*/i, '')}
+                                      </span>
+                                    </div>
+                                    <span className="text-[10px] font-bold text-blue-700 bg-blue-100/70 border border-blue-200 px-2 py-0.5 rounded-full">
+                                      {visitProcs.length} {visitProcs.length === 1 ? 'Procedure' : 'Procedures'}
+                                    </span>
+                                  </div>
+
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-left text-xs">
+                                      <thead className="bg-slate-50/50 text-slate-500 font-semibold border-b border-slate-100">
+                                        <tr>
+                                          <th className="p-2.5 pl-3">Procedure Name</th>
+                                          <th className="p-2.5">Code</th>
+                                          <th className="p-2.5">Tooth #</th>
+                                          <th className="p-2.5">Clinical Notes</th>
+                                          <th className="p-2.5 pr-3">Status</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100">
+                                        {visitProcs.map((proc: any) => {
+                                          const procName =
+                                            proc.procedureName || proc.procedureMaster?.name || 'Procedure';
+                                          const rawStatus = (proc.status || '').toUpperCase().replace(/[\s-]+/g, '_');
+                                          let statusLabel = 'Planned';
+                                          let statusStyle = 'bg-blue-50 text-blue-700 border-blue-200';
+                                          if (rawStatus === 'COMPLETED') {
+                                            statusLabel = 'Completed';
+                                            statusStyle = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                                          } else if (rawStatus === 'IN_PROGRESS') {
+                                            statusLabel = 'In Progress';
+                                            statusStyle = 'bg-amber-50 text-amber-700 border-amber-200';
+                                          }
+
+                                          return (
+                                            <tr key={proc.id} className="hover:bg-slate-50/70 transition">
+                                              <td className="p-2.5 pl-3 font-bold text-slate-900">{procName}</td>
+                                              <td className="p-2.5 font-mono text-slate-500 text-[11px]">
+                                                {proc.procedureCode || '—'}
+                                              </td>
+                                              <td className="p-2.5 font-mono font-semibold text-slate-800">
+                                                {proc.toothNumber ? (
+                                                  <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[11px] border border-slate-200">
+                                                    #{proc.toothNumber}
+                                                  </span>
+                                                ) : (
+                                                  <span className="text-slate-400 font-normal">—</span>
+                                                )}
+                                              </td>
+                                              <td className="p-2.5 text-slate-600 max-w-xs">
+                                                {proc.clinicalNotes ? (
+                                                  <span className="line-clamp-2">{proc.clinicalNotes}</span>
+                                                ) : (
+                                                  <span className="text-slate-400 italic">None</span>
+                                                )}
+                                              </td>
+                                              <td className="p-2.5 pr-3">
+                                                <span
+                                                  className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${statusStyle}`}
+                                                >
+                                                  {statusLabel}
+                                                </span>
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              );
+                            });
+                          })()}
                         </div>
                       )}
                     </div>

@@ -77,17 +77,19 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
   const [settleAmount, setSettleAmount] = useState(0);
   const [settleMode, setSettleMode] = useState('CASH');
 
+  // Procedures Awaiting Billing
+  const [unbilledProcedures, setUnbilledProcedures] = useState<any[]>([]);
+
   // Settle Procedure Balance Modal
   const [settleProcBill, setSettleProcBill] = useState<any | null>(null);
   const [settleProcAmount, setSettleProcAmount] = useState(0);
   const [settleProcMode, setSettleProcMode] = useState('CASH');
 
-  // Handle passed pending procedure
+  // Handle passed pending procedure from Operations
   useEffect(() => {
     if (pendingProcedureToBill) {
       setBillingTab('procedure');
-      setActiveProcedureToBill(pendingProcedureToBill);
-      setProcPaidAmount(pendingProcedureToBill.charges + 500);
+      // DO NOT auto-open modal! Billing must only be done in Billing when clicking on the patient
     }
   }, [pendingProcedureToBill]);
 
@@ -111,15 +113,22 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
 
   const fetchBills = async () => {
     try {
-      const [consultRes, procRes] = await Promise.all([
+      const [consultRes, procRes, procsListRes] = await Promise.all([
         api.get('/billing/consultation'),
         api.get('/billing/procedure/operations'),
+        api.get('/procedures'),
       ]);
       if (consultRes.data.success) {
         setBills(consultRes.data.bills);
       }
       if (procRes.data.success) {
         setProcedureBills(procRes.data.bills);
+      }
+      if (procsListRes.data.success) {
+        const unbilled = (procsListRes.data.procedures || []).filter(
+          (p: any) => !p.operationInvoice
+        );
+        setUnbilledProcedures(unbilled);
       }
     } catch (err) {
       console.error(err);
@@ -158,11 +167,15 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
     socket.on('billing:consultation-created', handleBillUpdate);
     socket.on('billing:payment-received', handleBillUpdate);
     socket.on('procedure:completed', handleBillUpdate);
+    socket.on('procedure:created', handleBillUpdate);
+    socket.on('procedure:scheduled', handleBillUpdate);
 
     return () => {
       socket.off('billing:consultation-created', handleBillUpdate);
       socket.off('billing:payment-received', handleBillUpdate);
       socket.off('procedure:completed', handleBillUpdate);
+      socket.off('procedure:created', handleBillUpdate);
+      socket.off('procedure:scheduled', handleBillUpdate);
     };
   }, []);
 
@@ -449,114 +462,238 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* 2. PROCEDURE / MINOR OT BILLS TABLE                                       */}
+      {/* 2. PROCEDURE / MINOR OT BILLS & AWAITING BILLING                           */}
       {/* ========================================================================= */}
       {billingTab === 'procedure' && (
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-800">
-              Completed Procedure Bills ({procedureBills.length})
-            </span>
-            <span className="text-[11px] text-amber-700 font-semibold">Separate OT & Surgical Charges</span>
+        <div className="space-y-6">
+          {/* Section 2A: Procedures Awaiting Billing (Unbilled Procedures) */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-bold text-slate-800 flex items-center gap-2">
+                  <Scissors className="w-4 h-4 text-blue-600" />
+                  <span>Procedures Awaiting Billing ({unbilledProcedures.length})</span>
+                </span>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Click on any patient or procedure to finalize billing and generate an invoice
+                </p>
+              </div>
+              <span className="text-[11px] font-semibold text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200 shrink-0">
+                Billing completed in Billing module
+              </span>
+            </div>
+
+            {loading ? (
+              <div className="p-8 text-center text-xs text-slate-400">Loading procedures awaiting billing...</div>
+            ) : unbilledProcedures.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-400">
+                No pending procedures awaiting billing. All clinical procedures are currently billed.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-100">
+                    <tr>
+                      <th className="p-3 pl-5">Procedure Code</th>
+                      <th className="p-3">Date</th>
+                      <th className="p-3">Patient Name</th>
+                      <th className="p-3">Procedure Name</th>
+                      <th className="p-3">Tooth #</th>
+                      <th className="p-3">Dentist</th>
+                      <th className="p-3">Procedure Fee</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3 pr-5 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {unbilledProcedures.map((proc: any) => {
+                      const isPendingMatch = pendingProcedureToBill && pendingProcedureToBill.id === proc.id;
+                      const procName = proc.procedureName || proc.procedureMaster?.name || 'Procedure';
+                      const dentistName = proc.doctor?.user?.fullName || proc.dentistName || 'Dentist';
+
+                      return (
+                        <tr
+                          key={proc.id}
+                          className={`hover:bg-blue-50/60 transition cursor-pointer ${
+                            isPendingMatch ? 'bg-amber-50/80 border-l-4 border-l-amber-500' : ''
+                          }`}
+                          onClick={() => {
+                            setActiveProcedureToBill(proc);
+                            setProcPaidAmount(proc.charges + 500);
+                          }}
+                        >
+                          <td className="p-3 pl-5 font-mono font-bold text-slate-800">{proc.procedureCode}</td>
+                          <td className="p-3 text-slate-500 font-medium">
+                            {new Date(proc.procedureDate).toLocaleDateString('en-GB', {
+                              day: '2-digit',
+                              month: 'short',
+                              year: 'numeric',
+                            })}
+                          </td>
+                          <td className="p-3 font-semibold text-slate-900">
+                            <div className="flex items-center gap-1.5">
+                              <span className="hover:underline text-blue-900 font-bold">{proc.patient?.name}</span>
+                              {isPendingMatch && (
+                                <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-1.5 py-0.2 rounded border border-amber-200">
+                                  Selected
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-mono font-semibold">
+                              {proc.patient?.patientCode}
+                            </div>
+                          </td>
+                          <td className="p-3 font-semibold text-slate-900">{procName}</td>
+                          <td className="p-3 font-mono font-bold text-slate-700">
+                            {proc.toothNumber ? (
+                              <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[11px] border border-slate-200">
+                                {proc.toothNumber}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 font-normal">—</span>
+                            )}
+                          </td>
+                          <td className="p-3 text-slate-700">{dentistName}</td>
+                          <td className="p-3 font-bold text-slate-900 font-mono">₹{proc.charges}</td>
+                          <td className="p-3">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-blue-50 text-blue-700 border border-blue-200">
+                              {proc.status}
+                            </span>
+                          </td>
+                          <td className="p-3 pr-5 text-right">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveProcedureToBill(proc);
+                                setProcPaidAmount(proc.charges + 500);
+                              }}
+                              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] transition shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <CreditCard className="w-3.5 h-3.5" />
+                              <span>Bill Patient</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
-          {loading ? (
-            <div className="p-12 text-center text-xs text-slate-400">Loading procedure bills...</div>
-          ) : procedureBills.length === 0 ? (
-            <div className="p-12 text-center text-xs text-slate-400">
-              No procedure invoices found. Go to "Operations & Procedures", schedule and click "Complete & Bill" to finalize billing here.
+          {/* Section 2B: Completed Procedure Invoices */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800">
+                Completed Procedure Invoices ({procedureBills.length})
+              </span>
+              <span className="text-[11px] text-amber-700 font-semibold">Separate OT & Surgical Charges</span>
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-100">
-                  <tr>
-                    <th className="p-3 pl-5">Invoice #</th>
-                    <th className="p-3">Date</th>
-                    <th className="p-3">Patient</th>
-                    <th className="p-3">Procedure Name</th>
-                    <th className="p-3">Surgeon</th>
-                    <th className="p-3">Total Amount</th>
-                    <th className="p-3">Paid / Pending</th>
-                    <th className="p-3">Status</th>
-                    <th className="p-3 pr-5 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {procedureBills.map((opBill) => (
-                    <tr key={opBill.id} className="hover:bg-slate-50/60 transition">
-                      <td className="p-3 pl-5 font-mono font-bold text-amber-900">{opBill.invoiceNumber}</td>
-                      <td className="p-3 text-slate-500">{new Date(opBill.billDate).toLocaleDateString()}</td>
-                      <td className="p-3 font-semibold text-slate-800">
-                        <div>{opBill.procedure?.patient?.name}</div>
-                        <div className="text-[10px] text-slate-400 font-mono">
-                          {opBill.procedure?.patient?.patientCode}
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <div className="font-semibold text-slate-900">{opBill.procedure?.procedureMaster?.name}</div>
-                        <div className="text-[10px] text-amber-700 font-mono">{opBill.procedure?.procedureCode}</div>
-                      </td>
-                      <td className="p-3 text-slate-700">{opBill.procedure?.doctor?.user?.fullName}</td>
-                      <td className="p-3 font-bold text-slate-900">₹{opBill.totalAmount}</td>
-                      <td className="p-3">
-                        <div className="text-emerald-600 font-medium">₹{opBill.paidAmount} Paid</div>
-                        {opBill.pendingBalance > 0 && (
-                          <div className="text-rose-600 font-bold text-[11px]">₹{opBill.pendingBalance} Due</div>
-                        )}
-                      </td>
-                      <td className="p-3">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                            opBill.paymentStatus === 'PAID'
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : 'bg-amber-50 text-amber-700 border border-amber-200'
-                          }`}
-                        >
-                          {opBill.paymentStatus}
-                        </span>
-                      </td>
-                      <td className="p-3 pr-5 text-right space-x-1.5">
-                        {/* WhatsApp Share Button */}
-                        <button
-                          onClick={() => {
-                            const msg = createProcedureBillMessage(opBill);
-                            sendWhatsAppMessage(opBill.procedure?.patient?.mobile || '', msg);
-                          }}
-                          className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded font-bold text-[11px] transition inline-flex items-center gap-1 cursor-pointer"
-                          title="Send Procedure Invoice to Patient via WhatsApp"
-                        >
-                          <Share2 className="w-3 h-3 text-emerald-600" />
-                          <span>WhatsApp</span>
-                        </button>
 
-                        <button
-                          onClick={() => generateProcedureInvoicePDF(opBill, opBill.payments || [])}
-                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-[11px] transition inline-flex items-center gap-1 cursor-pointer"
-                          title="Print Procedure Tax Invoice PDF"
-                        >
-                          <Printer className="w-3 h-3 text-slate-600" />
-                          <span>Print</span>
-                        </button>
-
-                        {opBill.pendingBalance > 0 && (
+            {loading ? (
+              <div className="p-12 text-center text-xs text-slate-400">Loading procedure bills...</div>
+            ) : procedureBills.length === 0 ? (
+              <div className="p-12 text-center text-xs text-slate-400">
+                No completed procedure invoices found yet.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-100">
+                    <tr>
+                      <th className="p-3 pl-5">Invoice #</th>
+                      <th className="p-3">Date</th>
+                      <th className="p-3">Patient</th>
+                      <th className="p-3">Procedure Name</th>
+                      <th className="p-3">Surgeon</th>
+                      <th className="p-3">Total Amount</th>
+                      <th className="p-3">Paid / Pending</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3 pr-5 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {procedureBills.map((opBill) => (
+                      <tr key={opBill.id} className="hover:bg-slate-50/60 transition">
+                        <td className="p-3 pl-5 font-mono font-bold text-amber-900">{opBill.invoiceNumber}</td>
+                        <td className="p-3 text-slate-500">{new Date(opBill.billDate).toLocaleDateString()}</td>
+                        <td className="p-3 font-semibold text-slate-800">
+                          <div>{opBill.procedure?.patient?.name}</div>
+                          <div className="text-[10px] text-slate-400 font-mono">
+                            {opBill.procedure?.patient?.patientCode}
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          <div className="font-semibold text-slate-900">
+                            {opBill.procedure?.procedureMaster?.name || opBill.procedure?.procedureName || 'Procedure'}
+                          </div>
+                          <div className="text-[10px] text-amber-700 font-mono">{opBill.procedure?.procedureCode}</div>
+                        </td>
+                        <td className="p-3 text-slate-700">
+                          {opBill.procedure?.doctor?.user?.fullName || opBill.procedure?.dentistName || 'Dentist'}
+                        </td>
+                        <td className="p-3 font-bold text-slate-900">₹{opBill.totalAmount}</td>
+                        <td className="p-3">
+                          <div className="text-emerald-600 font-medium">₹{opBill.paidAmount} Paid</div>
+                          {opBill.pendingBalance > 0 && (
+                            <div className="text-rose-600 font-bold text-[11px]">₹{opBill.pendingBalance} Due</div>
+                          )}
+                        </td>
+                        <td className="p-3">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                              opBill.paymentStatus === 'PAID'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}
+                          >
+                            {opBill.paymentStatus}
+                          </span>
+                        </td>
+                        <td className="p-3 pr-5 text-right space-x-1.5">
+                          {/* WhatsApp Share Button */}
                           <button
                             onClick={() => {
-                              setSettleProcBill(opBill);
-                              setSettleProcAmount(opBill.pendingBalance);
+                              const msg = createProcedureBillMessage(opBill);
+                              sendWhatsAppMessage(opBill.procedure?.patient?.mobile || '', msg);
                             }}
-                            className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded font-semibold text-[11px] transition cursor-pointer"
+                            className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded font-bold text-[11px] transition inline-flex items-center gap-1 cursor-pointer"
+                            title="Send Procedure Invoice to Patient via WhatsApp"
                           >
-                            Collect Due
+                            <Share2 className="w-3 h-3 text-emerald-600" />
+                            <span>WhatsApp</span>
                           </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+
+                          <button
+                            onClick={() => generateProcedureInvoicePDF(opBill, opBill.payments || [])}
+                            className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-[11px] transition inline-flex items-center gap-1 cursor-pointer"
+                            title="Print Procedure Tax Invoice PDF"
+                          >
+                            <Printer className="w-3 h-3 text-slate-600" />
+                            <span>Print</span>
+                          </button>
+
+                          {opBill.pendingBalance > 0 && (
+                            <button
+                              onClick={() => {
+                                setSettleProcBill(opBill);
+                                setSettleProcAmount(opBill.pendingBalance);
+                              }}
+                              className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded font-semibold text-[11px] transition cursor-pointer"
+                            >
+                              Collect Due
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -568,8 +705,8 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
               Finalize Procedure Billing & Collect Payment
             </h3>
             <p className="text-xs text-slate-500 mb-4">
-              Patient: <strong>{activeProcedureToBill.patient.name}</strong> ({activeProcedureToBill.patient.patientCode}) •
-              Procedure: <strong>{activeProcedureToBill.procedureMaster.name}</strong>
+              Patient: <strong>{activeProcedureToBill.patient?.name}</strong> ({activeProcedureToBill.patient?.patientCode}) •
+              Procedure: <strong>{activeProcedureToBill.procedureMaster?.name || activeProcedureToBill.procedureName || 'Dental Procedure'}</strong>
             </p>
 
             <form onSubmit={handleFinalizeProcedureBilling} className="space-y-4">
