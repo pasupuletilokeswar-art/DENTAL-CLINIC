@@ -33,6 +33,99 @@ async function generateAppointmentCode(): Promise<string> {
   return `${prefix}${seq.toString().padStart(5, '0')}`;
 }
 
+// GET /api/appointments/calendar-summary - Summary counts per day for month calendar view
+router.get('/calendar-summary', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const { month, doctorId, specialization } = req.query; // format: YYYY-MM
+    let startDate: Date;
+    let endDate: Date;
+
+    if (month && typeof month === 'string' && month.includes('-')) {
+      const [year, m] = month.split('-').map(Number);
+      startDate = new Date(year, m - 1, 1, 0, 0, 0);
+      endDate = new Date(year, m, 1, 0, 0, 0);
+    } else {
+      const now = new Date();
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0);
+    }
+
+    const where: any = {
+      appointmentDate: { gte: startDate, lt: endDate },
+      status: { notIn: [AppointmentStatus.CANCELLED] },
+    };
+
+    if (doctorId && typeof doctorId === 'string') {
+      where.doctorId = doctorId;
+    }
+    if (specialization && typeof specialization === 'string') {
+      where.specialization = specialization;
+    }
+
+    const appointments = await prisma.appointment.findMany({
+      where,
+      select: {
+        appointmentDate: true,
+        specialization: true,
+        status: true,
+      },
+    });
+
+    const summary: Record<string, { total: number; dental: number; ortho: number; completed: number }> = {};
+
+    for (const apt of appointments) {
+      const key = apt.appointmentDate.toISOString().substring(0, 10);
+      if (!summary[key]) {
+        summary[key] = { total: 0, dental: 0, ortho: 0, completed: 0 };
+      }
+      summary[key].total += 1;
+      if (apt.specialization === Specialization.DENTAL) summary[key].dental += 1;
+      if (apt.specialization === Specialization.ORTHOPEDIC) summary[key].ortho += 1;
+      if (apt.status === AppointmentStatus.COMPLETED) summary[key].completed += 1;
+    }
+
+    res.json({ success: true, summary });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/appointments/busy-slots - Get booked time slots for a specific doctor and date
+router.get('/busy-slots', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const { doctorId, date } = req.query;
+    if (!doctorId || typeof doctorId !== 'string' || !date || typeof date !== 'string') {
+      return res.status(400).json({ success: false, message: 'doctorId and date are required' });
+    }
+
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const nextDay = new Date(d);
+    nextDay.setDate(nextDay.getDate() + 1);
+
+    const appointments = await prisma.appointment.findMany({
+      where: {
+        doctorId,
+        appointmentDate: { gte: d, lt: nextDay },
+        status: { notIn: [AppointmentStatus.CANCELLED] },
+      },
+      select: {
+        id: true,
+        appointmentCode: true,
+        startTime: true,
+        endTime: true,
+        durationMinutes: true,
+        patient: { select: { name: true, patientCode: true } },
+      },
+      orderBy: { startTime: 'asc' },
+    });
+
+    res.json({ success: true, busySlots: appointments });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // GET /api/appointments - List appointments with filters
 router.get('/', authenticateToken, async (req: Request, res: Response) => {
   try {
