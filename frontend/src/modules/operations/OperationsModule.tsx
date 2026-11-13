@@ -16,6 +16,7 @@ import {
   Check,
   Layers,
   User,
+  Clock,
 } from 'lucide-react';
 import api from '../../services/api';
 import { Procedure, ProcedureMaster, Patient, Doctor } from '../../types';
@@ -125,6 +126,31 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
+  const [updatingProcId, setUpdatingProcId] = useState<string | null>(null);
+  const [actionSuccessMessage, setActionSuccessMessage] = useState<string | null>(null);
+
+  const handleSendToBilling = async (proc: Procedure) => {
+    setUpdatingProcId(proc.id);
+    setActionSuccessMessage(null);
+    try {
+      const res = await api.patch(`/procedures/${proc.id}/status`, {
+        status: 'COMPLETED',
+      });
+      if (res.data.success) {
+        setActionSuccessMessage(
+          `Procedure ${proc.procedureCode} (${proc.procedureName || 'Dental Procedure'}) for ${proc.patient.name} marked as Completed & sent to Billing queue!`
+        );
+        fetchData();
+        setTimeout(() => {
+          setActionSuccessMessage(null);
+        }, 5000);
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Error updating procedure status');
+    } finally {
+      setUpdatingProcId(null);
+    }
+  };
 
   const fetchData = async () => {
     try {
@@ -852,6 +878,23 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
         </button>
       </div>
 
+      {/* Action Success Alert */}
+      {actionSuccessMessage && (
+        <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs flex items-center justify-between shadow-xs">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="font-semibold">{actionSuccessMessage}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionSuccessMessage(null)}
+            className="text-emerald-700 hover:text-emerald-900 p-0.5 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Procedures List Table */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex items-center justify-between">
@@ -926,23 +969,33 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
                       <td className="p-3 font-bold text-slate-900">₹{proc.charges}</td>
                       <td className="p-3">{getStatusBadge(proc.status)}</td>
                       <td className="p-3 pr-5 text-right space-x-1">
-                        {!proc.operationInvoice ? (
-                          <button
-                            onClick={() => {
-                              if (onNavigateToBillingProcedure) {
-                                onNavigateToBillingProcedure(proc);
-                              }
-                            }}
-                            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] transition shadow-sm inline-flex items-center gap-1.5 cursor-pointer"
-                            title="Go to Billing to bill this procedure"
-                          >
-                            <span>Complete & Bill</span>
-                            <ArrowRight className="w-3.5 h-3.5" />
-                          </button>
-                        ) : (
-                          <span className="text-[11px] text-slate-500 font-mono font-bold">
-                            {proc.operationInvoice?.invoiceNumber || 'Billed'}
+                        {proc.operationInvoice ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-mono font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            <span>{proc.operationInvoice.invoiceNumber || 'Billed'}</span>
                           </span>
+                        ) : proc.status === 'COMPLETED' ? (
+                          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                            <Clock className="w-3 h-3 text-amber-600" />
+                            <span>Sent to Billing</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={updatingProcId === proc.id}
+                            onClick={() => handleSendToBilling(proc)}
+                            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-lg font-bold text-[11px] transition shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+                            title="Mark procedure Completed and send to Billing queue without leaving this page"
+                          >
+                            {updatingProcId === proc.id ? (
+                              <span>Sending...</span>
+                            ) : (
+                              <>
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>Complete & Bill</span>
+                              </>
+                            )}
+                          </button>
                         )}
                       </td>
                     </tr>

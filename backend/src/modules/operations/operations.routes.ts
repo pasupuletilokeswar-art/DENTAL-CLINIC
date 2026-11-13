@@ -240,6 +240,44 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
   }
 });
 
+// PATCH /api/procedures/:id/status - Update procedure status (e.g. mark COMPLETED and send to billing queue)
+router.patch('/:id/status', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const rawStatus = (status || 'COMPLETED').toUpperCase().replace(/[\s-]+/g, '_');
+    let targetStatus: ProcedureStatus = ProcedureStatus.COMPLETED;
+    if (rawStatus === 'IN_PROGRESS') targetStatus = ProcedureStatus.IN_PROGRESS;
+    else if (rawStatus === 'PLANNED') targetStatus = ProcedureStatus.PLANNED;
+    else if (rawStatus === 'CANCELLED') targetStatus = ProcedureStatus.CANCELLED;
+    else if (rawStatus === 'SCHEDULED') targetStatus = ProcedureStatus.SCHEDULED;
+    else targetStatus = ProcedureStatus.COMPLETED;
+
+    const proc = await prisma.procedure.update({
+      where: { id },
+      data: { status: targetStatus },
+      include: {
+        patient: { select: { id: true, name: true, patientCode: true, mobile: true } },
+        doctor: { include: { user: { select: { fullName: true } } } },
+        procedureMaster: true,
+        operationInvoice: true,
+      },
+    });
+
+    emitRealtimeEvent('procedure:completed', proc);
+    emitRealtimeEvent('procedure:updated', proc);
+
+    res.json({
+      success: true,
+      message: `Procedure ${proc.procedureCode} status updated to ${proc.status} and sent to Billing queue`,
+      procedure: proc,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // POST /api/procedures/:id/complete - Mark Completed & Generate Separate Operation Invoice
 const completeOperationSchema = z.object({
   consumablesFee: z.number().min(0).default(0),
