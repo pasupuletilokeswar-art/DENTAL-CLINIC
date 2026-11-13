@@ -27,12 +27,18 @@ interface BillingModuleProps {
   initialTab?: 'consultation' | 'procedure';
   pendingProcedureToBill?: Procedure | null;
   onClearPendingProcedure?: () => void;
+  pendingAppointmentToBill?: any | null;
+  onClearPendingAppointment?: () => void;
+  onNavigateToPharmacy?: (patientId?: string) => void;
 }
 
 export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
   initialTab = 'consultation',
   pendingProcedureToBill,
   onClearPendingProcedure,
+  pendingAppointmentToBill,
+  onClearPendingAppointment,
+  onNavigateToPharmacy,
 }) => {
   // Sub-tabs: Consultation Billing vs. Procedure / Minor OT Billing
   const [billingTab, setBillingTab] = useState<'consultation' | 'procedure'>(initialTab);
@@ -84,6 +90,24 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       setProcPaidAmount(pendingProcedureToBill.charges + 500);
     }
   }, [pendingProcedureToBill]);
+
+  // Handle passed pending appointment from completed visit
+  useEffect(() => {
+    if (pendingAppointmentToBill) {
+      setBillingTab('consultation');
+      if (pendingAppointmentToBill.patient) {
+        setSelectedPatient(pendingAppointmentToBill.patient);
+      }
+      if (pendingAppointmentToBill.doctorId) {
+        setSelectedDoctorId(pendingAppointmentToBill.doctorId);
+      }
+      const fee = pendingAppointmentToBill.doctor?.consultationFee || 600;
+      setConsultationFee(fee);
+      setPaidAmount(fee);
+      setNotes(`Consultation fee for ${pendingAppointmentToBill.appointmentCode || 'appointment'} (${pendingAppointmentToBill.visitType || 'Visit'})`);
+      setShowModal(true);
+    }
+  }, [pendingAppointmentToBill]);
 
   const fetchBills = async () => {
     try {
@@ -184,6 +208,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       if (res.data.success) {
         setShowModal(false);
         setSelectedPatient(null);
+        if (onClearPendingAppointment) onClearPendingAppointment();
         fetchBills();
       }
     } catch (err: any) {
@@ -633,12 +658,41 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
             <div className="flex items-center justify-between pb-4 border-b border-slate-100">
               <h3 className="text-base font-bold text-slate-800">Generate Consultation Invoice</h3>
               <button
-                onClick={() => setShowModal(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
+                onClick={() => {
+                  setShowModal(false);
+                  setSelectedPatient(null);
+                  if (onClearPendingAppointment) onClearPendingAppointment();
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
               >
                 ✕
               </button>
             </div>
+
+            {pendingAppointmentToBill && (
+              <div className="mt-3 p-3 bg-sky-50 border border-sky-200 text-sky-800 rounded-xl text-xs flex items-center justify-between">
+                <div>
+                  <span className="font-bold">Auto-filled from Appointment:</span> {pendingAppointmentToBill.appointmentCode}
+                  <div className="text-[11px] text-sky-600 mt-0.5">
+                    Doctor: Dr. {pendingAppointmentToBill.doctor?.user?.fullName} ({pendingAppointmentToBill.specialization})
+                  </div>
+                </div>
+                {onNavigateToPharmacy && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const pid = selectedPatient?.id || pendingAppointmentToBill.patientId;
+                      setShowModal(false);
+                      if (onClearPendingAppointment) onClearPendingAppointment();
+                      onNavigateToPharmacy(pid);
+                    }}
+                    className="px-2.5 py-1 bg-white hover:bg-sky-100 text-sky-700 border border-sky-300 rounded-lg text-[11px] font-bold shadow-2xs cursor-pointer"
+                  >
+                    Pharmacy Bill →
+                  </button>
+                )}
+              </div>
+            )}
 
             {formError && (
               <div className="mt-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">

@@ -126,9 +126,20 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
     socket.on('procedure:scheduled', handleProcedureUpdate);
     socket.on('procedure:completed', handleProcedureUpdate);
 
+    const handleAppointmentUpdate = () => {
+      fetchPatients();
+      if (selectedPatientId) fetchProfile(selectedPatientId);
+    };
+    socket.on('appointment:created', handleAppointmentUpdate);
+    socket.on('appointment:updated', handleAppointmentUpdate);
+    socket.on('appointment:rescheduled', handleAppointmentUpdate);
+
     return () => {
       socket.off('patient:registered', handlePatientUpdate);
       socket.off('patient:updated', handlePatientUpdate);
+      socket.off('appointment:created', handleAppointmentUpdate);
+      socket.off('appointment:updated', handleAppointmentUpdate);
+      socket.off('appointment:rescheduled', handleAppointmentUpdate);
       socket.off('procedure:created', handleProcedureUpdate);
       socket.off('procedure:scheduled', handleProcedureUpdate);
       socket.off('procedure:completed', handleProcedureUpdate);

@@ -21,6 +21,7 @@ export function App() {
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [selectedPatientNav, setSelectedPatientNav] = useState<string | null>(null);
   const [pendingProcedureToBill, setPendingProcedureToBill] = useState<any | null>(null);
+  const [pendingAppointmentToBill, setPendingAppointmentToBill] = useState<any | null>(null);
 
   useEffect(() => {
     // Check existing session
@@ -109,8 +110,13 @@ export function App() {
                   if (patientId) setSelectedPatientNav(patientId);
                   setActiveTab('clinical-notes');
                 }}
-                onNavigateToBilling={(patientId) => {
-                  if (patientId) setSelectedPatientNav(patientId);
+                onNavigateToBilling={(aptOrPatientId) => {
+                  if (typeof aptOrPatientId === 'string') {
+                    setSelectedPatientNav(aptOrPatientId);
+                  } else if (aptOrPatientId && typeof aptOrPatientId === 'object') {
+                    setPendingAppointmentToBill(aptOrPatientId);
+                    if (aptOrPatientId.patientId) setSelectedPatientNav(aptOrPatientId.patientId);
+                  }
                   setActiveTab('billing');
                 }}
                 onNavigateToPatient={(patientId) => {
@@ -125,6 +131,12 @@ export function App() {
                 initialTab={pendingProcedureToBill ? 'procedure' : 'consultation'}
                 pendingProcedureToBill={pendingProcedureToBill}
                 onClearPendingProcedure={() => setPendingProcedureToBill(null)}
+                pendingAppointmentToBill={pendingAppointmentToBill}
+                onClearPendingAppointment={() => setPendingAppointmentToBill(null)}
+                onNavigateToPharmacy={(patientId) => {
+                  if (patientId) setSelectedPatientNav(patientId);
+                  setActiveTab('pharmacy');
+                }}
               />
             )}
             {activeTab === 'pharmacy' && <PharmacyModule />}

@@ -61,7 +61,38 @@ export const generatePatientReportPDF = (patientProfile: any) => {
 
   let currentY = 92;
 
-  // 1. Clinical Notes Table
+  // 1. Appointments History Table
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text('Appointment History & Scheduled Visits', 14, currentY);
+
+  const aptRows = (p.appointments || []).map((apt: any) => [
+    apt.appointmentCode || 'APT',
+    new Date(apt.appointmentDate).toISOString().substring(0, 10),
+    new Date(apt.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    `Dr. ${apt.doctor?.user?.fullName || 'Doctor'}`,
+    apt.specialization || 'DENTAL',
+    apt.procedureName || apt.visitType || 'General',
+    apt.status || 'SCHEDULED',
+  ]);
+
+  autoTable(doc, {
+    startY: currentY + 3,
+    head: [['APT #', 'Date', 'Time', 'Doctor', 'Dept', 'Visit / Procedure', 'Status']],
+    body: aptRows.length > 0 ? aptRows : [['No appointments recorded yet', '', '', '', '', '', '']],
+    theme: 'grid',
+    headStyles: { fillColor: [0, 144, 231], textColor: 255, fontStyle: 'bold' },
+    styles: { fontSize: 8, cellPadding: 2 },
+  });
+
+  currentY = (doc as any).lastAutoTable.finalY + 10;
+
+  // 2. Clinical Notes Table
+  if (currentY > 220) {
+    doc.addPage();
+    currentY = 20;
+  }
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
@@ -86,7 +117,7 @@ export const generatePatientReportPDF = (patientProfile: any) => {
 
   currentY = (doc as any).lastAutoTable.finalY + 10;
 
-  // 2. Consultation Invoices Table
+  // 3. Consultation Invoices Table
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
   doc.text('Consultation Bills & Payments', 14, currentY);
