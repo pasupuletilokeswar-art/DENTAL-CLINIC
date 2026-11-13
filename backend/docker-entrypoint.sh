@@ -92,7 +92,7 @@ echo "==> [Clinic Backend] Public schema base table count: $TABLE_COUNT"
 # 5. Schema synchronization and setup
 if [ "$TABLE_COUNT" -eq "0" ]; then
   echo "==> [Clinic Backend] Empty database confirmed. Running initial Prisma schema push..."
-  npx prisma db push --skip-generate
+  npx prisma db push --skip-generate --accept-data-loss
 
   echo "==> [Clinic Backend] Seeding baseline master administrator..."
   npx tsx prisma/seed.ts
@@ -101,7 +101,7 @@ if [ "$TABLE_COUNT" -eq "0" ]; then
 else
   echo "==> [Clinic Backend] Existing schema detected ($TABLE_COUNT tables found)."
   echo "==> [Clinic Backend] Automatically synchronizing database schema..."
-  npx prisma db push --skip-generate
+  npx prisma db push --skip-generate --accept-data-loss
   echo "==> [Clinic Backend] Database schema synchronized successfully."
 fi
 
