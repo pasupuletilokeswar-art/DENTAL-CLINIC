@@ -926,7 +926,7 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
                       <td className="p-3 font-bold text-slate-900">₹{proc.charges}</td>
                       <td className="p-3">{getStatusBadge(proc.status)}</td>
                       <td className="p-3 pr-5 text-right space-x-1">
-                        {proc.status !== 'COMPLETED' ? (
+                        {!proc.operationInvoice ? (
                           <button
                             onClick={() => {
                               if (onNavigateToBillingProcedure) {
@@ -934,6 +934,7 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
                               }
                             }}
                             className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] transition shadow-sm inline-flex items-center gap-1.5 cursor-pointer"
+                            title="Go to Billing to bill this procedure"
                           >
                             <span>Complete & Bill</span>
                             <ArrowRight className="w-3.5 h-3.5" />
