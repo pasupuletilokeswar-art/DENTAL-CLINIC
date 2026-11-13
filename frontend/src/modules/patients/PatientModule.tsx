@@ -23,6 +23,12 @@ import {
   DollarSign,
   ChevronRight,
   Filter,
+  User,
+  Mail,
+  MapPin,
+  AlertTriangle,
+  Check,
+  UserPlus,
 } from 'lucide-react';
 import api from '../../services/api';
 import { Patient } from '../../types';
@@ -172,21 +178,66 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
     setFormData((prev) => ({ ...prev, dob: dobStr, age: age >= 0 ? age.toString() : '0' }));
   };
 
+  const handleMobileInput = (val: string) => {
+    const digitsOnly = val.replace(/\D/g, '').slice(0, 10);
+    setFormData((prev) => ({ ...prev, mobile: digitsOnly }));
+  };
+
+  const toggleMedicalAlert = (alertText: string) => {
+    if (alertText === 'None') {
+      setFormData((prev) => ({ ...prev, medicalAlerts: '' }));
+      return;
+    }
+    const current = formData.medicalAlerts
+      ? formData.medicalAlerts.split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
+    let updated: string[];
+    if (current.some((s) => s.toLowerCase() === alertText.toLowerCase())) {
+      updated = current.filter((s) => s.toLowerCase() !== alertText.toLowerCase());
+    } else {
+      updated = [...current, alertText];
+    }
+    setFormData((prev) => ({ ...prev, medicalAlerts: updated.join(', ') }));
+  };
+
   const handleSavePatient = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
+
+    // Strict Validations
+    if (!formData.name.trim() || formData.name.trim().length < 2) {
+      setFormError('Patient full name is required (at least 2 letters).');
+      return;
+    }
+
+    if (!/^\d{10}$/.test(formData.mobile)) {
+      setFormError('Mobile number must be exactly 10 digits (e.g. 9876543210).');
+      return;
+    }
+
+    if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
+      setFormError('Please enter a valid email address (e.g. name@example.com).');
+      return;
+    }
+
+    const ageNum = parseInt(formData.age, 10);
+    if (isNaN(ageNum) || ageNum < 0 || ageNum > 125) {
+      setFormError('Please enter a valid age between 0 and 125.');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
       const payload = {
-        name: formData.name,
-        mobile: formData.mobile,
-        email: formData.email || undefined,
+        name: formData.name.trim(),
+        mobile: formData.mobile.trim(),
+        email: formData.email ? formData.email.trim() : undefined,
         dob: formData.dob || undefined,
-        age: parseInt(formData.age, 10) || 0,
+        age: ageNum,
         gender: formData.gender,
-        address: formData.address || undefined,
-        medicalAlerts: formData.medicalAlerts || undefined,
+        address: formData.address ? formData.address.trim() : undefined,
+        medicalAlerts: formData.medicalAlerts ? formData.medicalAlerts.trim() : undefined,
       };
 
       if (editingPatient) {
@@ -281,7 +332,24 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
     const p = patientProfile.patient;
     const list: any[] = [];
 
-    // Appointments
+    // 1. Initial Intake & Registration (Start of Clinical Flow)
+    const regDate = p.registrationDate || p.createdAt;
+    if (regDate) {
+      list.push({
+        type: 'REGISTRATION',
+        date: regDate,
+        time: regDate,
+        title: `Patient Intake & Registration`,
+        subtitle: `Registered Code: ${p.patientCode} • Mobile: ${p.mobile} • ${p.gender}, ${p.age} yrs`,
+        details: p.medicalAlerts ? `Medical Alerts: ${p.medicalAlerts}` : `Official clinic registration completed`,
+        status: 'COMPLETED',
+        color: 'teal',
+        icon: UserPlus,
+        raw: p,
+      });
+    }
+
+    // 2. Appointments
     (p.appointments || []).forEach((apt: any) => {
       list.push({
         type: 'APPOINTMENT',
@@ -723,6 +791,107 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
                   </div>
                 </div>
 
+                {/* 5-Step Clinical Workflow Flow Tracker (Registration -> Appointment -> Consultation -> Procedures -> Billing) */}
+                <div className="px-5 py-2.5 bg-slate-100/70 border-b border-slate-200 flex items-center justify-between gap-1 overflow-x-auto">
+                  <div className="flex items-center gap-1.5 min-w-max text-xs">
+                    {/* Stage 1: Registration */}
+                    <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 font-bold shadow-2xs">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-teal-600" />
+                      <span>1. Registered</span>
+                    </div>
+
+                    <ArrowRight className="w-3 h-3 text-slate-400 shrink-0" />
+
+                    {/* Stage 2: Appointment */}
+                    <button
+                      onClick={() => setActiveTab('appointments')}
+                      className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border text-xs font-bold transition shadow-2xs cursor-pointer ${
+                        (patientProfile.patient.appointments?.length || 0) > 0
+                          ? 'bg-sky-50 border-sky-200 text-sky-800 hover:bg-sky-100'
+                          : 'bg-white border-slate-200 text-slate-400'
+                      }`}
+                    >
+                      {(patientProfile.patient.appointments?.length || 0) > 0 ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-sky-600" />
+                      ) : (
+                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                      )}
+                      <span>2. Appointment ({patientProfile.patient.appointments?.length || 0})</span>
+                    </button>
+
+                    <ArrowRight className="w-3 h-3 text-slate-400 shrink-0" />
+
+                    {/* Stage 3: Consultation & Notes */}
+                    <button
+                      onClick={() => setActiveTab('notes')}
+                      className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border text-xs font-bold transition shadow-2xs cursor-pointer ${
+                        (patientProfile.patient.clinicalNotes?.length || 0) > 0
+                          ? 'bg-indigo-50 border-indigo-200 text-indigo-800 hover:bg-indigo-100'
+                          : 'bg-white border-slate-200 text-slate-400'
+                      }`}
+                    >
+                      {(patientProfile.patient.clinicalNotes?.length || 0) > 0 ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600" />
+                      ) : (
+                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                      )}
+                      <span>3. Consultation ({patientProfile.patient.clinicalNotes?.length || 0})</span>
+                    </button>
+
+                    <ArrowRight className="w-3 h-3 text-slate-400 shrink-0" />
+
+                    {/* Stage 4: Procedures */}
+                    <button
+                      onClick={() => setActiveTab('procedures')}
+                      className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border text-xs font-bold transition shadow-2xs cursor-pointer ${
+                        (patientProfile.patient.procedures?.length || 0) > 0
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+                          : 'bg-white border-slate-200 text-slate-400'
+                      }`}
+                    >
+                      {(patientProfile.patient.procedures?.length || 0) > 0 ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      ) : (
+                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                      )}
+                      <span>4. Procedures ({patientProfile.patient.procedures?.length || 0})</span>
+                    </button>
+
+                    <ArrowRight className="w-3 h-3 text-slate-400 shrink-0" />
+
+                    {/* Stage 5: Billing */}
+                    <button
+                      onClick={() => setActiveTab('billing')}
+                      className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border text-xs font-bold transition shadow-2xs cursor-pointer ${
+                        patientProfile.financialSummary?.totalOutstanding <= 0 &&
+                        ((patientProfile.patient.consultationBills?.length || 0) > 0 || (patientProfile.patient.pharmacySales?.length || 0) > 0)
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+                          : (patientProfile.financialSummary?.totalOutstanding > 0)
+                          ? 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+                          : 'bg-white border-slate-200 text-slate-400'
+                      }`}
+                    >
+                      {patientProfile.financialSummary?.totalOutstanding <= 0 &&
+                      ((patientProfile.patient.consultationBills?.length || 0) > 0 || (patientProfile.patient.pharmacySales?.length || 0) > 0) ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      ) : patientProfile.financialSummary?.totalOutstanding > 0 ? (
+                        <Clock className="w-3.5 h-3.5 text-amber-600" />
+                      ) : (
+                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                      )}
+                      <span>
+                        5. Billing (
+                        {patientProfile.financialSummary?.totalOutstanding > 0
+                          ? `₹${patientProfile.financialSummary.totalOutstanding} Due`
+                          : (patientProfile.patient.consultationBills?.length || 0) > 0 || (patientProfile.patient.pharmacySales?.length || 0) > 0
+                          ? 'Settled'
+                          : 'Pending'}
+                        )
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
                 {/* Sub-tab Navigation */}
                 <div className="px-5 border-b border-slate-200 bg-white flex items-center gap-1 overflow-x-auto">
                   {[
@@ -1103,103 +1272,156 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
         )}
       </div>
 
-      {/* Register/Edit Patient Modal */}
+      {/* Register/Edit Patient Modal - Elevated Medical SaaS UI */}
       {showRegisterModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-              <h3 className="text-base font-bold text-slate-800">
-                {editingPatient ? 'Edit Patient Information' : 'Register New Patient'}
-              </h3>
+          <div className="bg-white rounded-2xl max-w-xl w-full shadow-2xl border border-slate-100 max-h-[92vh] overflow-y-auto">
+            {/* Header Banner */}
+            <div className="bg-gradient-to-r from-teal-700 via-teal-600 to-slate-900 text-white p-5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/10 backdrop-blur-xs border border-white/20 flex items-center justify-center text-teal-200">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white tracking-tight">
+                    {editingPatient ? 'Edit Patient Information' : 'Register New Patient'}
+                  </h3>
+                  <p className="text-xs text-teal-100/80">
+                    Demographic record, 10-digit mobile verification, and clinical intake
+                  </p>
+                </div>
+              </div>
+
               <button
+                type="button"
                 onClick={() => setShowRegisterModal(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
+                className="p-1.5 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             {formError && (
-              <div className="mt-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">
+              <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0" />
                 <span>{formError}</span>
               </div>
             )}
 
-            <form onSubmit={handleSavePatient} className="mt-4 space-y-4">
+            <form onSubmit={handleSavePatient} className="p-6 space-y-4">
+              {/* Full Name */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1">
                   Patient Full Name <span className="text-red-500">*</span>
                 </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="e.g. Ramesh Chandra"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Mobile Number <span className="text-red-500">*</span>
-                  </label>
+                <div className="relative">
+                  <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
-                    type="tel"
+                    type="text"
                     required
-                    value={formData.mobile}
-                    onChange={(e) => setFormData({ ...formData, mobile: e.target.value })}
-                    placeholder="10-digit mobile"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Email (Optional)</label>
-                  <input
-                    type="email"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    placeholder="patient@gmail.com"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="e.g. Ramesh Chandra"
+                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 focus:bg-white transition"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              {/* Mobile Number & Email */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Date of Birth</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Mobile Number <span className="text-red-500">*</span>
+                    </label>
+                    <span
+                      className={`text-[10px] font-mono font-bold px-1.5 py-0.2 rounded ${
+                        formData.mobile.length === 10
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : formData.mobile.length > 0
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}
+                    >
+                      {formData.mobile.length}/10 digits
+                    </span>
+                  </div>
+                  <div className="relative">
+                    <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="tel"
+                      required
+                      value={formData.mobile}
+                      onChange={(e) => handleMobileInput(e.target.value)}
+                      placeholder="10-digit mobile"
+                      maxLength={10}
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 focus:bg-white transition font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Email Address <span className="text-slate-400 font-normal lowercase">(optional)</span>
+                    </label>
+                    {formData.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email) && (
+                      <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-0.5">
+                        <Check className="w-3 h-3" /> Valid
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                      placeholder="patient@gmail.com"
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 focus:bg-white transition"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* DOB, Age, Gender */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1">
+                    Date of Birth
+                  </label>
                   <input
                     type="date"
                     value={formData.dob}
                     onChange={(e) => handleAgeCalculation(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 focus:bg-white transition"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1">
                     Age <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="number"
                     required
                     min="0"
+                    max="125"
                     value={formData.age}
                     onChange={(e) => setFormData({ ...formData, age: e.target.value })}
-                    placeholder="Age in yrs"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
+                    placeholder="e.g. 28"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 focus:bg-white transition font-mono"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Gender</label>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1">
+                    Gender
+                  </label>
                   <select
                     value={formData.gender}
                     onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 focus:bg-white transition"
                   >
                     <option value="MALE">Male</option>
                     <option value="FEMALE">Female</option>
@@ -1208,27 +1430,70 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
                 </div>
               </div>
 
+              {/* Residential Address */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Residential Address</label>
-                <input
-                  type="text"
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                  placeholder="Street, Area, City"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
-                />
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1">
+                  Residential Address
+                </label>
+                <div className="relative">
+                  <MapPin className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                  <input
+                    type="text"
+                    value={formData.address}
+                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                    placeholder="Street, locality, city / area..."
+                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 focus:bg-white transition"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Medical Alerts / Allergies (e.g., Penicillin allergy, Diabetes, Hypertension)
-                </label>
+              {/* Medical Alerts & Allergies with Quick Tags */}
+              <div className="pt-1">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Medical Alerts / Allergies</span>
+                  </label>
+                  <span className="text-[10px] text-slate-400">Click quick tags to add</span>
+                </div>
+
+                {/* Quick Alert Chips */}
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {[
+                    'None',
+                    'Penicillin Allergy',
+                    'Diabetes (Type 2)',
+                    'Hypertension (BP)',
+                    'Asthma',
+                    'Bleeding Disorder',
+                  ].map((alertTag) => {
+                    const isSelected = alertTag === 'None'
+                      ? !formData.medicalAlerts
+                      : (formData.medicalAlerts || '').toLowerCase().includes(alertTag.toLowerCase());
+
+                    return (
+                      <button
+                        key={alertTag}
+                        type="button"
+                        onClick={() => toggleMedicalAlert(alertTag)}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer ${
+                          isSelected
+                            ? 'bg-rose-50 border-rose-300 text-rose-700 shadow-2xs'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-200'
+                        }`}
+                      >
+                        {alertTag}
+                      </button>
+                    );
+                  })}
+                </div>
+
                 <textarea
                   rows={2}
                   value={formData.medicalAlerts}
                   onChange={(e) => setFormData({ ...formData, medicalAlerts: e.target.value })}
-                  placeholder="Crucial medical warnings..."
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
+                  placeholder="Crucial medical alerts (e.g., Penicillin allergy, diabetic, pregnant, pacemaker)..."
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 focus:bg-white transition"
                 />
               </div>
 
@@ -1236,14 +1501,14 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowRegisterModal(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-xl text-xs font-semibold text-slate-600 transition cursor-pointer"
+                  className="px-4 py-2.5 border border-slate-200 hover:bg-slate-50 rounded-xl text-xs font-bold text-slate-600 transition cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting}
-                  className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-semibold transition shadow-sm disabled:opacity-50 cursor-pointer"
+                  disabled={submitting || formData.mobile.length !== 10 || !formData.name.trim()}
+                  className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition shadow-sm disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
                 >
                   {submitting ? 'Saving...' : editingPatient ? 'Update Patient' : 'Register Patient'}
                 </button>

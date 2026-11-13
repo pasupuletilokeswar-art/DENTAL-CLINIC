@@ -51,6 +51,7 @@ export interface Appointment {
   procedureName?: string | null;
   status: 'SCHEDULED' | 'CONFIRMED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'NO_SHOW';
   reasonForVisit?: string | null;
+  consultationBill?: ConsultationBill | null;
 }
 
 export interface ClinicalNote {

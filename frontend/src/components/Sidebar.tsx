@@ -51,11 +51,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         />
       </div>
 
-      {/* Navigation (Squared White-Grey Action Blocks) */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      {/* Navigation */}
+      <nav className="flex-1 px-3 py-4 space-y-1.5 overflow-y-auto">
         <div className="px-3 pb-2 flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-slate-400">
-          <span>Core Workflows</span>
-          <span className="w-8 h-px bg-slate-300" />
+          <span>Clinical Workflows</span>
+          <span className="w-8 h-px bg-slate-200" />
         </div>
         {menuItems.map((item) => {
           const Icon = item.icon;
@@ -64,10 +64,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-none text-xs font-semibold transition-all cursor-pointer ${
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                 isActive
-                  ? 'bg-[#0090e7] text-white shadow-sm font-bold border-l-4 border-[#0a2540]'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70 hover:border-l-4 hover:border-[#0090e7]'
+                  ? 'bg-gradient-to-r from-teal-600 to-sky-600 text-white shadow-sm font-bold'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
               }`}
             >
               <div className="flex items-center gap-3">
