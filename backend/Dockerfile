@@ -44,5 +44,5 @@ RUN sed -i 's/\r$//' ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
 
 EXPOSE 5000
 
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
 CMD ["node", "dist/index.js"]

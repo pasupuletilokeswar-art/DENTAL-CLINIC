@@ -1,3 +1,5 @@
+name: dental-clinic
+
 networks:
   clinic_network:
     name: clinic_network
