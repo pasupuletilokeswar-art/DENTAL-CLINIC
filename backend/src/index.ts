@@ -17,6 +17,7 @@ import operationBillingRoutes from './modules/billing/operation-billing.routes';
 import pharmacyRoutes from './modules/pharmacy/pharmacy.routes';
 import operationRoutes from './modules/operations/operations.routes';
 import reportsRoutes from './modules/reports/reports.routes';
+import dentalChartRoutes from './modules/dental-chart/dental-chart.routes';
 import labRoutes from './modules/lab/lab.routes';
 
 dotenv.config();
@@ -25,7 +26,16 @@ const app = express();
 const server = http.createServer(app);
 
 const PORT = process.env.PORT || 5000;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
+const CORS_ORIGIN = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map((s) => s.trim())
+  : [
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'http://localhost:5175',
+      'http://127.0.0.1:5173',
+      'http://127.0.0.1:5174',
+      'http://127.0.0.1:5175',
+    ];
 
 // Socket.io initialization
 initSocketIO(server, CORS_ORIGIN);
@@ -53,6 +63,7 @@ app.use('/api/pharmacy', pharmacyRoutes);
 app.use('/api/procedures', operationRoutes);
 app.use('/api/lab', labRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/dental-chart', dentalChartRoutes);
 
 // Health Route
 app.get('/api/health', async (req: Request, res: Response) => {

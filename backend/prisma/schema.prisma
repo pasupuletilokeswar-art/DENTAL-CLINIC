@@ -124,6 +124,7 @@ model Patient {
   consultationBills ConsultationBill[]
   pharmacySales   PharmacySale[]
   procedures      Procedure[]
+  dentalFindings  DentalFinding[]
   labCases        LabCase[]
 
   @@index([mobile])
@@ -486,6 +487,29 @@ model StockMovement {
   timestamp      DateTime @default(now())
 
   @@index([medicineId, timestamp])
+}
+
+// 3D & 2D Interactive Dental Chart Findings
+model DentalFinding {
+  id              String   @id @default(uuid())
+  patientId       String
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  consultationId  String?
+  toothNumber     Int      // FDI number (11-48 for adult, 51-85 for pediatric)
+  dentitionType   String   @default("ADULT") // "ADULT" | "PEDIATRIC"
+  toothName       String
+  surface         String   // "Occlusal" | "Incisal" | "Buccal" | "Labial" | "Lingual" | "Mesial" | "Distal" | "Root" | "General"
+  condition       String   // e.g. "Dental Caries", "Composite Restoration", "Tooth Fracture", etc.
+  severity        String   @default("Moderate") // "Mild" | "Moderate" | "Severe" | "Critical" | "N/A"
+  treatment       String?  // e.g. "Restoration", "Root Canal Treatment", "Extraction", etc.
+  notes           String?
+  status          String   @default("ACTIVE") // "ACTIVE" | "RESOLVED" | "OBSERVATION"
+  createdById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([patientId, toothNumber])
+  @@index([patientId])
 }
 
 // ==============================================================

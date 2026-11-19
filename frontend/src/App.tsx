@@ -12,6 +12,7 @@ import { OperationsModule } from './modules/operations/OperationsModule';
 import { DentalLabModule } from './modules/lab/DentalLabModule';
 import { ReportsModule } from './modules/reports/ReportsModule';
 import { AdminModule } from './modules/admin/AdminModule';
+import { DentalChartModule } from './modules/dental-chart/DentalChartModule';
 import { User } from './types';
 import { getSocket } from './services/socket';
 import api from './services/api';
@@ -39,6 +40,10 @@ export function App() {
     const token = localStorage.getItem('clinic_token');
     if (savedUser && token) {
       setUser(JSON.parse(savedUser));
+    }
+
+    if (params.get('tab')) {
+      setActiveTab(params.get('tab')!);
     }
 
     // Connect socket
@@ -91,6 +96,16 @@ export function App() {
 
   if (!user) {
     return <LoginPage onLoginSuccess={(u) => setUser(u)} />;
+  }
+
+  // Full-width 3D Dental Charting Workspace (Bypasses sidebar and clinic layout)
+  if (activeTab === 'dental-chart') {
+    return (
+      <DentalChartModule
+        initialPatientId={selectedPatientNav || undefined}
+        onBack={() => setActiveTab('dashboard')}
+      />
+    );
   }
 
   return (

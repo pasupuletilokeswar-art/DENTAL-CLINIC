@@ -95,6 +95,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'patients', label: 'Patient Directory', icon: Users },
     { id: 'appointments', label: 'Appointments & Slots', icon: Calendar },
     { id: 'clinical-notes', label: '9-Field Clinical Notes', icon: FileText },
+    { id: 'dental-chart', label: '3D Dental Charting', icon: Stethoscope },
     { id: 'billing', label: 'Consultation Billing', icon: CreditCard },
     { id: 'pharmacy', label: 'Pharmacy & Stock (FEFO)', icon: Pill },
     {
