@@ -155,6 +155,7 @@ export const ClinicalNotesModule: React.FC = () => {
         });
 
         // Reset fields
+        setSelectedPatient(null);
         setChiefComplaints('');
         setDetailedMedicalHistory('');
         setTeethChart({});
@@ -165,6 +166,13 @@ export const ClinicalNotesModule: React.FC = () => {
         setNotes('');
         setAdvice('');
         fetchNotesForPatient(selectedPatient.id);
+
+        // Move to the top smoothly
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        const mainContainer = document.querySelector('main');
+        if (mainContainer) {
+          mainContainer.scrollTo({ top: 0, behavior: 'smooth' });
+        }
       }
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.response?.data?.message || 'Error saving notes' });

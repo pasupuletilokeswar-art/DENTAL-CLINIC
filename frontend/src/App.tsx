@@ -205,7 +205,9 @@ export function App() {
                 }}
               />
             )}
-            {activeTab === 'reports' && <ReportsModule />}
+            {activeTab === 'reports' && (
+              <ReportsModule onNavigateTab={(t) => setActiveTab(t as any)} />
+            )}
             {activeTab === 'admin' && <AdminModule />}
           </div>
         </main>

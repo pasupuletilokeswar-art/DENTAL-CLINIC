@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   FileText,
   User,
@@ -79,6 +79,8 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
   onNavigateToProcedures,
   onNavigateToHistory,
 }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
   // SECTION 1: Patient Complaint
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(initialPatient);
   const [visitDate, setVisitDate] = useState<string>(new Date().toISOString().substring(0, 10));
@@ -339,7 +341,31 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
           patient: selectedPatient,
           timestamp: new Date().toLocaleTimeString(),
         });
+
+        // Reset all clinical note fields to default initial state
+        setSelectedPatient(null);
+        setVisitDate(new Date().toISOString().substring(0, 10));
+        setSelectedComplaints([]);
+        setCustomComplaint('');
+        setDurationOfComplaint('');
+        setPatientDescription('');
+        setSelectedDoctorId('');
+        setConsultationDate(new Date().toISOString().substring(0, 10));
+        setFindingsList([]);
+        setCustomFindingInput('');
+        setTreatmentsList([]);
+        setCustomTreatmentInput('');
+        setGeneralNotes('');
+        setFollowUpDate('');
+        setFormError(null);
+
+        // Move to the top smoothly
+        containerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         window.scrollTo({ top: 0, behavior: 'smooth' });
+        const mainContainer = document.querySelector('main');
+        if (mainContainer) {
+          mainContainer.scrollTo({ top: 0, behavior: 'smooth' });
+        }
       }
     } catch (err: any) {
       console.error(err);
@@ -350,7 +376,7 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
   };
 
   return (
-    <div className="space-y-6">
+    <div ref={containerRef} className="space-y-6">
       {/* Top Banner & Context */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
