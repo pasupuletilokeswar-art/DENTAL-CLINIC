@@ -145,6 +145,12 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
     }
 
     const chosenBatch = validBatches[0];
+    const rawMrp = Number(chosenBatch?.mrp || (med as any).mrp || chosenBatch?.sellingPrice || 0);
+    const taxRate = Number(chosenBatch?.gstRate ?? (med as any).gstRate ?? 12);
+    const basePrice = chosenBatch?.sellingPrice && chosenBatch.sellingPrice < rawMrp
+      ? chosenBatch.sellingPrice
+      : (taxRate > 0 ? Math.round((rawMrp / (1 + taxRate / 100)) * 100) / 100 : rawMrp);
+    const mrp = rawMrp > 0 ? rawMrp : Math.round((basePrice * (1 + taxRate / 100)) * 100) / 100;
 
     const existingIdx = invoiceItems.findIndex(
       (it) => it.medicineId === med.id && it.selectedBatchId === chosenBatch?.id
@@ -158,12 +164,12 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
       }
       const updated = [...invoiceItems];
       updated[existingIdx].quantity += 1;
-      const sub = updated[existingIdx].quantity * updated[existingIdx].unitPrice;
+      const itemMrp = updated[existingIdx].mrp || updated[existingIdx].unitPrice;
+      const sub = updated[existingIdx].quantity * itemMrp;
       const disc = (sub * updated[existingIdx].discount) / 100;
       updated[existingIdx].total = Math.round((sub - disc) * 100) / 100;
       setInvoiceItems(updated);
     } else {
-      const unitPrice = chosenBatch?.sellingPrice || (med as any).mrp || 0;
       const newItem: InvoiceItem = {
         id: `item-${Date.now()}-${Math.random()}`,
         medicineId: med.id,
@@ -174,10 +180,11 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
         batchExpiry: chosenBatch ? chosenBatch.expiryDate : '',
         availableQty: chosenBatch ? chosenBatch.quantityInBase : med.currentStock,
         quantity: 1,
-        unitPrice,
+        unitPrice: basePrice,
+        mrp,
         discount: 0,
-        taxRate: 12,
-        total: unitPrice,
+        taxRate,
+        total: mrp,
         allBatches: med.batches,
       };
       setInvoiceItems((prev) => [newItem, ...prev]);
@@ -200,7 +207,8 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
       return;
     }
     target.quantity = newQty;
-    const sub = target.quantity * target.unitPrice;
+    const itemMrp = target.mrp || target.unitPrice;
+    const sub = target.quantity * itemMrp;
     const disc = (sub * target.discount) / 100;
     target.total = Math.round((sub - disc) * 100) / 100;
     setInvoiceItems(updated);
@@ -219,15 +227,24 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
         );
         return;
       }
+      const rawMrp = Number(selected.mrp || target.mrp || selected.sellingPrice || 0);
+      const taxRate = Number(selected.gstRate ?? target.taxRate ?? 12);
+      const basePrice = selected.sellingPrice && selected.sellingPrice < rawMrp
+        ? selected.sellingPrice
+        : (taxRate > 0 ? Math.round((rawMrp / (1 + taxRate / 100)) * 100) / 100 : rawMrp);
+      const mrp = rawMrp > 0 ? rawMrp : Math.round((basePrice * (1 + taxRate / 100)) * 100) / 100;
+
       target.selectedBatchId = selected.id;
       target.selectedBatchNo = selected.batchNumber;
       target.batchExpiry = selected.expiryDate;
       target.availableQty = selected.quantityInBase;
-      target.unitPrice = selected.sellingPrice || target.unitPrice;
+      target.unitPrice = basePrice;
+      target.mrp = mrp;
+      target.taxRate = taxRate;
       if (target.quantity > selected.quantityInBase) {
         target.quantity = Math.max(1, selected.quantityInBase);
       }
-      const sub = target.quantity * target.unitPrice;
+      const sub = target.quantity * mrp;
       const disc = (sub * target.discount) / 100;
       target.total = Math.round((sub - disc) * 100) / 100;
       setInvoiceItems(updated);
@@ -249,13 +266,24 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
   };
 
   // Totals
-  const subTotalAmount = invoiceItems.reduce((acc, it) => acc + it.total, 0);
-  const totalTaxAmount = invoiceItems.reduce((acc, it) => {
-    const taxablePortion = it.total / (1 + it.taxRate / 100);
-    return acc + (it.total - taxablePortion);
+  const cartMrpSubtotal = invoiceItems.reduce((acc, it) => acc + (it.mrp || it.unitPrice) * it.quantity, 0);
+  const cartItemDiscountTotal = invoiceItems.reduce(
+    (acc, it) => acc + (((it.mrp || it.unitPrice) * it.quantity * it.discount) / 100),
+    0
+  );
+  const overallDiscountAmount = ((cartMrpSubtotal - cartItemDiscountTotal) * overallDiscount) / 100;
+  const finalDiscountAmount = Math.round((cartItemDiscountTotal + overallDiscountAmount) * 100) / 100;
+  const grandTotal = Math.max(0, Math.round(cartMrpSubtotal - finalDiscountAmount));
+
+  // Taxable base and GST breakdown
+  const taxableBaseAmount = invoiceItems.reduce((acc, it) => {
+    const rate = it.taxRate || 12;
+    const lineMrpPayable = (it.mrp || it.unitPrice) * it.quantity * (1 - it.discount / 100);
+    const base = rate > 0 ? lineMrpPayable / (1 + rate / 100) : lineMrpPayable;
+    return acc + base;
   }, 0);
-  const finalDiscountAmount = (subTotalAmount * overallDiscount) / 100;
-  const grandTotal = Math.max(0, Math.round(subTotalAmount - finalDiscountAmount));
+  const totalTaxAmount = Math.max(0, Math.round((grandTotal - (taxableBaseAmount * (1 - overallDiscount / 100))) * 100) / 100);
+  const subTotalAmount = Math.round((grandTotal - totalTaxAmount) * 100) / 100;
 
   // Keep single pay mode synchronized
   useEffect(() => {
@@ -315,15 +343,19 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
       else if (paymentMode === 'Card') mappedPaymentMode = 'CARD';
       else if (paymentMode === 'Split') mappedPaymentMode = 'CASH';
 
-      const itemsPayload = invoiceItems.map((it) => ({
-        medicineId: it.medicineId,
-        batchStockId: it.selectedBatchId,
-        quantity: it.quantity,
-        unitPrice: it.unitPrice,
-        discount: it.discount,
-        gstRate: it.taxRate ?? 12,
-        taxRate: it.taxRate ?? 12,
-      }));
+      const itemsPayload = invoiceItems.map((it) => {
+        const itemGrossBase = it.unitPrice * it.quantity;
+        const discRs = (itemGrossBase * it.discount) / 100;
+        return {
+          medicineId: it.medicineId,
+          batchStockId: it.selectedBatchId,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          discount: Math.round(discRs * 100) / 100,
+          gstRate: it.taxRate ?? 12,
+          taxRate: it.taxRate ?? 12,
+        };
+      });
 
       const payload = {
         patientId: customerMode === 'registered' ? selectedPatient?.id : undefined,
@@ -620,7 +652,10 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
 
                       <div className="text-right">
                         <div className="font-black text-sm text-emerald-700">
-                          ₹{med.batches[0]?.sellingPrice || (med as any).mrp || 0}
+                          MRP ₹{Number(med.batches[0]?.mrp || (med as any).mrp || med.batches[0]?.sellingPrice || 0).toFixed(2)}
+                        </div>
+                        <div className="text-[10px] text-slate-500">
+                          Base: ₹{Number(med.batches[0]?.sellingPrice || (med as any).mrp || 0).toFixed(2)} + {med.batches[0]?.gstRate ?? (med as any).gstRate ?? 12}% GST
                         </div>
                         <span
                           className={`text-[9px] font-bold px-2 py-0.5 rounded-full inline-block mt-0.5 ${
@@ -645,17 +680,19 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
               <thead className="bg-[#F1F5F9] text-slate-700 font-black text-[10px] uppercase tracking-wider border-b border-slate-200">
                 <tr>
                   <th className="p-3 pl-4">Medicine &amp; Batch</th>
-                  <th className="p-3 text-center w-28">Quantity</th>
-                  <th className="p-3 text-right">Price</th>
-                  <th className="p-3 text-right w-20">Discount</th>
-                  <th className="p-3 text-right">Total</th>
+                  <th className="p-3 text-center w-24">Qty</th>
+                  <th className="p-3 text-right">MRP (Incl.)</th>
+                  <th className="p-3 text-right">Base Price</th>
+                  <th className="p-3 text-right">GST Tax</th>
+                  <th className="p-3 text-right w-20">Disc %</th>
+                  <th className="p-3 text-right">Total (₹)</th>
                   <th className="p-3 text-center w-10"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {invoiceItems.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-12 text-center text-slate-400">
+                    <td colSpan={8} className="py-12 text-center text-slate-400">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
                           <ShoppingCart className="w-6 h-6 stroke-1" />
@@ -668,98 +705,127 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
                     </td>
                   </tr>
                 ) : (
-                  invoiceItems.map((item, idx) => (
-                    <tr key={item.id} className="hover:bg-slate-50/70 transition">
-                      <td className="p-3 pl-4">
-                        <div className="font-extrabold text-slate-900 text-xs">{item.medicineName}</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          {item.allBatches.length > 1 ? (
-                            <select
-                              value={item.selectedBatchId}
-                              onChange={(e) => handleBatchChange(idx, e.target.value)}
-                              className="text-[10px] bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5 font-mono text-slate-700 font-bold"
+                  invoiceItems.map((item, idx) => {
+                    const itemMrp = item.mrp || item.unitPrice;
+                    const taxPerUnit = Math.max(0, itemMrp - item.unitPrice);
+                    const totalTaxForItem = Math.round(taxPerUnit * item.quantity * (1 - item.discount / 100) * 100) / 100;
+
+                    return (
+                      <tr key={item.id} className="hover:bg-slate-50/70 transition">
+                        <td className="p-3 pl-4">
+                          <div className="font-extrabold text-slate-900 text-xs">{item.medicineName}</div>
+                          <div className="flex items-center gap-2 mt-1">
+                            {item.allBatches.length > 1 ? (
+                              <select
+                                value={item.selectedBatchId}
+                                onChange={(e) => handleBatchChange(idx, e.target.value)}
+                                className="text-[10px] bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5 font-mono text-slate-700 font-bold"
+                              >
+                                {item.allBatches.map((b) => {
+                                  const isExpired = new Date(b.expiryDate).getTime() < Date.now();
+                                  return (
+                                    <option key={b.id} value={b.id} disabled={isExpired}>
+                                      Batch: {b.batchNumber} (Qty: {b.quantityInBase}) {isExpired ? '[EXPIRED - LOCKED]' : ''}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            ) : (
+                              <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                Batch: {item.selectedBatchNo}
+                              </span>
+                            )}
+                            {item.batchExpiry && (
+                              <span className="text-[10px] text-slate-400">
+                                Exp: {new Date(item.batchExpiry).toLocaleDateString()}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        <td className="p-3 text-center">
+                          <div className="inline-flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateQuantity(idx, -1)}
+                              className="w-5 h-5 rounded-lg bg-white hover:bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-xs cursor-pointer shadow-2xs"
                             >
-                              {item.allBatches.map((b) => {
-                                const isExpired = new Date(b.expiryDate).getTime() < Date.now();
-                                return (
-                                  <option key={b.id} value={b.id} disabled={isExpired}>
-                                    Batch: {b.batchNumber} (Qty: {b.quantityInBase}) {isExpired ? '[EXPIRED - LOCKED]' : ''}
-                                  </option>
-                                );
-                              })}
-                            </select>
-                          ) : (
-                            <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
-                              Batch: {item.selectedBatchNo}
+                              -
+                            </button>
+                            <span className="font-black text-xs w-6 text-center text-slate-900">
+                              {item.quantity}
                             </span>
-                          )}
-                          {item.batchExpiry && (
-                            <span className="text-[10px] text-slate-400">
-                              Exp: {new Date(item.batchExpiry).toLocaleDateString()}
-                            </span>
-                          )}
-                        </div>
-                      </td>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateQuantity(idx, 1)}
+                              className="w-5 h-5 rounded-lg bg-white hover:bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-xs cursor-pointer shadow-2xs"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </td>
 
-                      <td className="p-3 text-center">
-                        <div className="inline-flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+                        {/* MRP per unit (Tax Inclusive) */}
+                        <td className="p-3 text-right font-black text-slate-900">
+                          ₹{itemMrp.toFixed(2)}
+                        </td>
+
+                        {/* Base Price per unit (Excl. Tax) */}
+                        <td className="p-3 text-right font-medium text-slate-600">
+                          ₹{item.unitPrice.toFixed(2)}
+                        </td>
+
+                        {/* GST Tax info */}
+                        <td className="p-3 text-right">
+                          <div className="font-semibold text-xs text-sky-800">
+                            ₹{totalTaxForItem.toFixed(2)}
+                          </div>
+                          <div className="text-[9px] text-slate-400">
+                            ({item.taxRate}% GST)
+                          </div>
+                        </td>
+
+                        {/* Discount */}
+                        <td className="p-3 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              value={item.discount}
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value) || 0;
+                                const updated = [...invoiceItems];
+                                updated[idx].discount = Math.min(100, Math.max(0, val));
+                                const curMrp = updated[idx].mrp || updated[idx].unitPrice;
+                                const sub = updated[idx].quantity * curMrp;
+                                const disc = (sub * updated[idx].discount) / 100;
+                                updated[idx].total = Math.round((sub - disc) * 100) / 100;
+                                setInvoiceItems(updated);
+                              }}
+                              className="w-12 px-1.5 py-0.5 text-right bg-slate-50 border border-slate-200 rounded-md font-bold text-xs"
+                            />
+                            <span className="text-slate-400 text-[10px]">%</span>
+                          </div>
+                        </td>
+
+                        {/* Line Total */}
+                        <td className="p-3 text-right font-black text-emerald-700 text-sm">
+                          ₹{item.total.toFixed(2)}
+                        </td>
+
+                        <td className="p-3 text-center">
                           <button
                             type="button"
-                            onClick={() => handleUpdateQuantity(idx, -1)}
-                            className="w-5 h-5 rounded-lg bg-white hover:bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-xs cursor-pointer shadow-2xs"
+                            onClick={() => handleRemoveItem(idx)}
+                            className="p-1 text-slate-400 hover:text-rose-600 transition cursor-pointer"
                           >
-                            -
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
-                          <span className="font-black text-xs w-6 text-center text-slate-900">
-                            {item.quantity}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleUpdateQuantity(idx, 1)}
-                            className="w-5 h-5 rounded-lg bg-white hover:bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-xs cursor-pointer shadow-2xs"
-                          >
-                            +
-                          </button>
-                        </div>
-                      </td>
-
-                      <td className="p-3 text-right font-medium text-slate-800">₹{item.unitPrice}</td>
-
-                      <td className="p-3 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <input
-                            type="number"
-                            min="0"
-                            max="100"
-                            value={item.discount}
-                            onChange={(e) => {
-                              const val = parseFloat(e.target.value) || 0;
-                              const updated = [...invoiceItems];
-                              updated[idx].discount = Math.min(100, Math.max(0, val));
-                              const sub = updated[idx].quantity * updated[idx].unitPrice;
-                              const disc = (sub * updated[idx].discount) / 100;
-                              updated[idx].total = Math.round((sub - disc) * 100) / 100;
-                              setInvoiceItems(updated);
-                            }}
-                            className="w-12 px-1.5 py-0.5 text-right bg-slate-50 border border-slate-200 rounded-md font-bold text-xs"
-                          />
-                          <span className="text-slate-400 text-[10px]">%</span>
-                        </div>
-                      </td>
-
-                      <td className="p-3 text-right font-black text-slate-900">₹{item.total}</td>
-
-                      <td className="p-3 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveItem(idx)}
-                          className="p-1 text-slate-400 hover:text-rose-600 transition cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -812,13 +878,28 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
               </div>
             )}
 
-            <div className="flex items-center justify-between pt-1">
-              <div>
-                <span className="text-[11px] text-slate-500 font-bold block">Items Subtotal: ₹{subTotalAmount.toFixed(2)}</span>
-                <span className="text-[10px] text-slate-400">Includes 12% GST: ₹{totalTaxAmount.toFixed(2)}</span>
+            <div className="flex flex-wrap items-center justify-between gap-4 pt-1">
+              <div className="space-y-0.5">
+                <div className="text-[11px] text-slate-600 flex items-center gap-2">
+                  <span>Gross MRP: <strong>₹{cartMrpSubtotal.toFixed(2)}</strong></span>
+                  <span>•</span>
+                  <span>Taxable Base: <strong>₹{subTotalAmount.toFixed(2)}</strong></span>
+                  <span>•</span>
+                  <span className="text-sky-700 font-bold">GST Tax: +₹{totalTaxAmount.toFixed(2)}</span>
+                </div>
+                {finalDiscountAmount > 0 && (
+                  <div className="text-[10px] text-rose-600 font-semibold">
+                    Discount Applied: -₹{finalDiscountAmount.toFixed(2)} ({overallDiscount}% overall)
+                  </div>
+                )}
+                <div className="text-[10px] text-slate-400">
+                  Customer pays Final MRP inclusive of all applicable GST taxes.
+                </div>
               </div>
               <div className="text-right">
-                <span className="text-[10px] uppercase font-bold text-slate-500 block">Grand Total Bill</span>
+                <span className="text-[10px] uppercase font-black tracking-wider text-slate-500 block">
+                  Grand Total (MRP Payable)
+                </span>
                 <span className="text-2xl font-black text-emerald-700">₹{grandTotal}</span>
               </div>
             </div>
@@ -982,9 +1063,14 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
                     </div>
 
                     <div className="flex items-center justify-between mt-2 pt-1 border-t border-slate-100">
-                      <span className="font-black text-sm text-emerald-700">
-                        ₹{validBatches[0]?.sellingPrice || (med as any).mrp || med.batches[0]?.sellingPrice || 0}
-                      </span>
+                      <div>
+                        <div className="font-black text-xs text-emerald-700">
+                          MRP ₹{Number(validBatches[0]?.mrp || (med as any).mrp || validBatches[0]?.sellingPrice || 0).toFixed(2)}
+                        </div>
+                        <div className="text-[9px] text-slate-400">
+                          Base: ₹{Number(validBatches[0]?.sellingPrice || (med as any).mrp || 0).toFixed(2)} + {validBatches[0]?.gstRate ?? (med as any).gstRate ?? 12}%
+                        </div>
+                      </div>
                       <button
                         type="button"
                         disabled={isDisabled}

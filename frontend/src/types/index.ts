@@ -147,6 +147,7 @@ export interface MedicineMaster {
   prescriptionType: string;
   reorderLevel: number;
   specialization?: 'DENTAL' | 'ORTHOPEDIC' | null;
+  gstRate?: number;
   currentStock: number;
   isLowStock: boolean;
   batches: MedicineBatchStock[];
@@ -161,6 +162,7 @@ export interface MedicineBatchStock {
   purchasePrice: number;
   mrp: number;
   sellingPrice: number;
+  gstRate?: number;
 }
 
 export interface ProcedureMaster {

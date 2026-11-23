@@ -11,6 +11,7 @@ export interface InvoiceItem {
   availableQty: number;
   quantity: number;
   unitPrice: number;
+  mrp?: number;
   discount: number;
   taxRate: number;
   total: number;

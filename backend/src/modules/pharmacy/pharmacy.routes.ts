@@ -25,6 +25,7 @@ const medicineMasterSchema = z.object({
   prescriptionType: z.nativeEnum(PrescriptionType).default(PrescriptionType.OTC),
   reorderLevel: z.number().int().min(0).default(20),
   specialization: z.enum(['DENTAL', 'ORTHOPEDIC']).optional().nullable(),
+  gstRate: z.number().min(0).optional().default(12),
 });
 
 // GET /api/pharmacy/medicines
@@ -76,7 +77,8 @@ router.get('/medicines', authenticateToken, async (req: Request, res: Response) 
 router.post('/medicines', authenticateToken, async (req: Request, res: Response) => {
   try {
     const data = medicineMasterSchema.parse(req.body);
-    const { openingStock, batchNumber, expiryDate, buyingPrice, mrp, sellingPrice, itemCodeCustom } = req.body;
+    const { openingStock, batchNumber, expiryDate, buyingPrice, mrp, sellingPrice, itemCodeCustom, gstRate, sellingTax } = req.body;
+    const taxRate = Number(gstRate) || Number(data.gstRate) || parseFloat(String(sellingTax).replace(/[^0-9.]/g, '')) || 12;
 
     const count = await prisma.medicineMaster.count();
     const itemCode = itemCodeCustom && itemCodeCustom.trim() !== ''
@@ -101,6 +103,7 @@ router.post('/medicines', authenticateToken, async (req: Request, res: Response)
           prescriptionType: data.prescriptionType,
           reorderLevel: data.reorderLevel,
           specialization: data.specialization || null,
+          gstRate: taxRate,
         },
       });
 
@@ -110,7 +113,7 @@ router.post('/medicines', authenticateToken, async (req: Request, res: Response)
         const exp = expiryDate ? new Date(expiryDate) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
         const bPrice = Number(buyingPrice) || 0;
         const mPrice = Number(mrp) || Number(sellingPrice) || 0;
-        const sPrice = Number(sellingPrice) || Number(mrp) || 0;
+        const sPrice = Number(sellingPrice) || (taxRate > 0 ? Math.round((mPrice / (1 + taxRate / 100)) * 100) / 100 : mPrice);
 
         await tx.medicineBatchStock.create({
           data: {
@@ -121,6 +124,7 @@ router.post('/medicines', authenticateToken, async (req: Request, res: Response)
             purchasePrice: bPrice,
             mrp: mPrice,
             sellingPrice: sPrice,
+            gstRate: taxRate,
           },
         });
 

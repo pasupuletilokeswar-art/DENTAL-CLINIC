@@ -370,6 +370,7 @@ model MedicineMaster {
   prescriptionType PrescriptionType @default(OTC)
   reorderLevel     Int              @default(20)
   specialization   Specialization?  // null if general, or DENTAL/ORTHO
+  gstRate          Float            @default(12.0)
   isActive         Boolean          @default(true)
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
@@ -390,6 +391,7 @@ model MedicineBatchStock {
   purchasePrice  Float
   mrp            Float
   sellingPrice   Float
+  gstRate        Float          @default(12.0)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
