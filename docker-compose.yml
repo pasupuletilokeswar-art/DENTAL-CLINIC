@@ -57,6 +57,10 @@ services:
       POSTGRES_PORT: 5432
       JWT_SECRET: ${JWT_SECRET:-clinic_jwt_super_secure_key_2026_dental_ortho}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
+      FAST2SMS_API_KEY: ${FAST2SMS_API_KEY:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER:-}
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5000/api/health || exit 1"]
       interval: 10s

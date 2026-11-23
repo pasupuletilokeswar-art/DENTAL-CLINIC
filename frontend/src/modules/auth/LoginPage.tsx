@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import hospaiDentalLogo from '../../assets/hospai-dental-logo-dark.png';
 import hospaiLoginLogo from '../../assets/hospai-login-logo.png';
@@ -83,39 +83,85 @@ interface LoginProps {
 }
 
 export const LoginPage: React.FC<LoginProps> = ({ onLoginSuccess }) => {
-  const [role, setRole] = useState<'staff' | 'doctor' | 'admin'>('admin');
-  const [username, setUsername] = useState<string>('');
-  const [password, setPassword] = useState<string>('');
+  // Dual Login Role: 'RECEPTIONIST' (acts as Admin) vs. 'DOCTOR' (Clinical Doctor Portal)
+  const [loginRole, setLoginRole] = useState<'RECEPTIONIST' | 'DOCTOR'>('RECEPTIONIST');
+
+  // Receptionist Credentials
+  const [username, setUsername] = useState<string>('admin');
+  const [password, setPassword] = useState<string>('admin123');
+
+  // Doctor Portal Credentials & Available Doctors
+  const [availableDoctors, setAvailableDoctors] = useState<any[]>([]);
+  const [selectedDoctorId, setSelectedDoctorId] = useState<string>('');
+  const [doctorPassword, setDoctorPassword] = useState<string>('doctor123');
+  const [loadingDoctors, setLoadingDoctors] = useState<boolean>(false);
+
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [remember, setRemember] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [showHelpModal, setShowHelpModal] = useState<boolean>(false);
 
+  const fetchAvailableDoctors = async () => {
+    try {
+      setLoadingDoctors(true);
+      const res = await api.get('/auth/available-doctors');
+      if (res.data && res.data.success && res.data.doctors) {
+        setAvailableDoctors(res.data.doctors);
+        if (res.data.doctors.length > 0 && !selectedDoctorId) {
+          setSelectedDoctorId(res.data.doctors[0].id);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load available doctors:', err);
+    } finally {
+      setLoadingDoctors(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAvailableDoctors();
+  }, []);
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!username.trim()) {
-      setError(
-        role === 'admin'
-          ? 'Please enter your admin username or email'
-          : role === 'doctor'
-          ? 'Please enter your doctor email or username'
-          : 'Please enter your work email or username'
-      );
-      return;
-    }
-    if (!password) {
-      setError('Please enter your password');
-      return;
+    setError('');
+
+    let loginUsername = '';
+    let loginPassword = '';
+
+    if (loginRole === 'RECEPTIONIST') {
+      if (!username.trim()) {
+        setError('Please enter receptionist username or email');
+        return;
+      }
+      if (!password) {
+        setError('Please enter your password');
+        return;
+      }
+      loginUsername = username.trim();
+      loginPassword = password;
+    } else {
+      // DOCTOR LOGIN
+      const selectedDoc = availableDoctors.find((d) => d.id === selectedDoctorId);
+      if (!selectedDoc) {
+        setError('Please select an active doctor profile');
+        return;
+      }
+      if (!doctorPassword) {
+        setError(`Please enter the login password for ${selectedDoc.name}`);
+        return;
+      }
+      loginUsername = selectedDoc.username;
+      loginPassword = doctorPassword;
     }
 
     setSubmitting(true);
-    setError('');
 
     try {
       const res = await api.post('/auth/login', {
-        username: username.trim(),
-        password: password,
+        username: loginUsername,
+        password: loginPassword,
       });
 
       if (res.data && res.data.success) {
@@ -135,8 +181,8 @@ export const LoginPage: React.FC<LoginProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  const fillQuickCredentials = (u: string, p: string, r: 'staff' | 'doctor' | 'admin') => {
-    setRole(r);
+  const fillQuickCredentials = (u: string, p: string) => {
+    setLoginRole('RECEPTIONIST');
     setUsername(u);
     setPassword(p);
     setShowHelpModal(false);
@@ -232,53 +278,52 @@ export const LoginPage: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       <main className="login-main">
         <div className="login-card">
           <img className="login-mobile-logo" src={hospaiDentalLogo} alt="HospAI Dental" />
-          <div className="login-heading">
-            <span className="login-secure-badge">SECURE SIGN IN</span>
-            <h2>
-              {role === 'staff' && 'Staff Portal'}
-              {role === 'doctor' && 'Doctor Portal'}
-              {role === 'admin' && 'Admin Portal'}
-            </h2>
-            <p>
-              {role === 'admin'
-                ? 'Sign in to system administration & configuration.'
-                : role === 'doctor'
-                ? 'Sign in to your clinical treatment workspace.'
-                : 'Sign in to the Clinic Staff workspace.'}
-            </p>
+
+          {/* DUAL ROLE SWITCHER TABS */}
+          <div className="flex items-center p-1 bg-slate-100 rounded-2xl mb-4 border border-slate-200">
+            <button
+              type="button"
+              onClick={() => {
+                setLoginRole('RECEPTIONIST');
+                setError('');
+              }}
+              className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
+                loginRole === 'RECEPTIONIST'
+                  ? 'bg-white text-blue-700 shadow-xs font-black border border-slate-200'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Icon name="staff" size={15} />
+              <span>Receptionist / Admin</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setLoginRole('DOCTOR');
+                setError('');
+                fetchAvailableDoctors();
+              }}
+              className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
+                loginRole === 'DOCTOR'
+                  ? 'bg-white text-teal-800 shadow-xs font-black border border-slate-200'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Icon name="doctor" size={15} />
+              <span>Doctor Portal</span>
+            </button>
           </div>
 
-          <div className="login-mode" role="tablist" aria-label="Choose login type">
-            <button
-              type="button"
-              className={role === 'staff' ? 'active' : ''}
-              onClick={() => {
-                setRole('staff');
-                setError('');
-              }}
-            >
-              <Icon name="staff" size={14} /> Staff
-            </button>
-            <button
-              type="button"
-              className={role === 'doctor' ? 'active' : ''}
-              onClick={() => {
-                setRole('doctor');
-                setError('');
-              }}
-            >
-              <Icon name="doctor" size={14} /> Doctor
-            </button>
-            <button
-              type="button"
-              className={role === 'admin' ? 'active' : ''}
-              onClick={() => {
-                setRole('admin');
-                setError('');
-              }}
-            >
-              <Icon name="admin" size={14} /> Admin
-            </button>
+          <div className="login-heading">
+            <span className={`login-secure-badge ${loginRole === 'DOCTOR' ? '!bg-teal-50 !text-teal-700 !border-teal-200' : ''}`}>
+              {loginRole === 'RECEPTIONIST' ? 'CLINIC RECEPTION & ADMIN' : 'CONSULTING DOCTOR WORKSPACE'}
+            </span>
+            <h2>{loginRole === 'RECEPTIONIST' ? 'Reception Desk Portal' : 'Doctor Clinical Workspace'}</h2>
+            <p>
+              {loginRole === 'RECEPTIONIST'
+                ? 'Manage appointments, patient registration, consultation billing, pharmacy sales & administration.'
+                : 'Select your doctor profile to view patient queue, 3D dental charting, findings & clinical notes.'}
+            </p>
           </div>
 
           {error && (
@@ -288,57 +333,154 @@ export const LoginPage: React.FC<LoginProps> = ({ onLoginSuccess }) => {
           )}
 
           <form className="login-form" onSubmit={submit}>
-            <label>
-              <span className="login-form-label-text">
-                {role === 'admin'
-                  ? 'Admin username or email'
-                  : role === 'doctor'
-                  ? 'Doctor email or username'
-                  : 'Work email or username'}
-              </span>
-              <div className="login-input">
-                <Icon
-                  name={role === 'doctor' ? 'doctor' : role === 'admin' ? 'admin' : 'staff'}
-                  size={15}
-                />
-                <input
-                  type="text"
-                  placeholder={
-                    role === 'admin'
-                      ? 'Enter admin username or email'
-                      : role === 'doctor'
-                      ? 'Enter doctor email or username'
-                      : 'Enter work email or username'
-                  }
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  autoComplete="username"
-                  required
-                />
-              </div>
-            </label>
-            <label>
-              <span className="login-form-label-text">Password</span>
-              <div className="login-input">
-                <Icon name="lock" size={15} />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  placeholder="Enter your password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete="current-password"
-                  required
-                />
-                <button
-                  type="button"
-                  className="login-password-toggle"
-                  onClick={() => setShowPassword((value) => !value)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                >
-                  <Icon name="eye" size={15} />
-                </button>
-              </div>
-            </label>
+            {/* RECEPTIONIST MODE FORM */}
+            {loginRole === 'RECEPTIONIST' && (
+              <>
+                <label>
+                  <span className="login-form-label-text">Receptionist Username or Email</span>
+                  <div className="login-input">
+                    <Icon name="staff" size={15} />
+                    <input
+                      type="text"
+                      placeholder="Enter username (e.g. admin)"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      autoComplete="username"
+                      required
+                    />
+                  </div>
+                </label>
+                <label>
+                  <span className="login-form-label-text">Password</span>
+                  <div className="login-input">
+                    <Icon name="lock" size={15} />
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="Enter your password (e.g. admin123)"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      autoComplete="current-password"
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="login-password-toggle"
+                      onClick={() => setShowPassword((value) => !value)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      <Icon name="eye" size={15} />
+                    </button>
+                  </div>
+                </label>
+              </>
+            )}
+
+            {/* DOCTOR PORTAL MODE FORM */}
+            {loginRole === 'DOCTOR' && (
+              <>
+                {loadingDoctors ? (
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center text-xs text-slate-500">
+                    Loading registered clinic doctors...
+                  </div>
+                ) : availableDoctors.length === 0 ? (
+                  <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-amber-900 text-xs space-y-2">
+                    <div className="font-bold">No registered doctors found in the clinic database.</div>
+                    <p className="text-amber-700">
+                      Please log in as Receptionist / Admin first to register consulting doctors under Admin & Staff Setup.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setLoginRole('RECEPTIONIST')}
+                      className="mt-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs cursor-pointer shadow-xs"
+                    >
+                      Sign In as Receptionist
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-1.5 mb-3">
+                      <div className="flex items-center justify-between">
+                        <span className="login-form-label-text block text-xs font-bold text-slate-700">
+                          Available Consulting Doctors ({availableDoctors.length})
+                        </span>
+                        <span className="text-[10px] text-teal-700 font-bold uppercase tracking-wider">
+                          Click your name
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 max-h-44 overflow-y-auto pr-1">
+                        {availableDoctors.map((doc) => {
+                          const isSelected = selectedDoctorId === doc.id;
+                          return (
+                            <div
+                              key={doc.id}
+                              onClick={() => {
+                                setSelectedDoctorId(doc.id);
+                                setError('');
+                              }}
+                              className={`p-2.5 rounded-xl border transition cursor-pointer flex items-center justify-between ${
+                                isSelected
+                                  ? 'bg-teal-50/90 border-teal-500 shadow-xs ring-2 ring-teal-500/20'
+                                  : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <div
+                                  className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs ${
+                                    isSelected ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-700'
+                                  }`}
+                                >
+                                  {doc.name?.replace(/^Dr\.?\s*/i, '').charAt(0) || 'D'}
+                                </div>
+                                <div className="text-left">
+                                  <div className="text-xs font-bold text-slate-900">{doc.name}</div>
+                                  <div className="text-[10px] text-slate-500 flex items-center gap-1.5">
+                                    <span className="font-bold text-teal-700 uppercase">{doc.specialization}</span>
+                                    <span>•</span>
+                                    <span>Fee: ₹{doc.consultationFee}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              {isSelected && (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-teal-600 text-white">
+                                  Selected
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Password for Selected Doctor */}
+                    <label>
+                      <span className="login-form-label-text">
+                        Password for {availableDoctors.find((d) => d.id === selectedDoctorId)?.name || 'Doctor'}
+                      </span>
+                      <div className="login-input">
+                        <Icon name="lock" size={15} />
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          placeholder="Enter doctor password (default: doctor123)"
+                          value={doctorPassword}
+                          onChange={(e) => setDoctorPassword(e.target.value)}
+                          autoComplete="current-password"
+                          required
+                        />
+                        <button
+                          type="button"
+                          className="login-password-toggle"
+                          onClick={() => setShowPassword((value) => !value)}
+                          aria-label={showPassword ? 'Hide password' : 'Show password'}
+                        >
+                          <Icon name="eye" size={15} />
+                        </button>
+                      </div>
+                    </label>
+                  </>
+                )}
+              </>
+            )}
+
             <div className="login-options">
               <label>
                 <input
@@ -349,21 +491,19 @@ export const LoginPage: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 <span>Keep me signed in</span>
               </label>
               <button type="button" onClick={() => setShowHelpModal(true)}>
-                Forgot password?
+                Quick Demo Access
               </button>
             </div>
 
-            <button className="login-submit" type="submit" disabled={submitting}>
+            <button className={`login-submit ${loginRole === 'DOCTOR' ? '!bg-teal-600 hover:!bg-teal-700' : ''}`} type="submit" disabled={submitting}>
               {submitting ? (
                 <span className="login-spinner" />
               ) : (
                 <>
                   <span>
-                    {role === 'doctor'
-                      ? 'Sign in as Doctor'
-                      : role === 'admin'
-                      ? 'Sign in as Admin'
-                      : 'Sign in as Staff'}
+                    {loginRole === 'RECEPTIONIST'
+                      ? 'Sign in as Receptionist / Admin'
+                      : `Sign in as ${availableDoctors.find((d) => d.id === selectedDoctorId)?.name || 'Doctor'}`}
                   </span>
                   <span className="login-submit-arrow">→</span>
                 </>
@@ -374,7 +514,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onLoginSuccess }) => {
           <div className="login-security">
             <Icon name="lock" size={15} />
             <span>
-              This is a synthetic prototype. No production authentication or patient data is used.
+              Role-Based Access: Receptionist has administrative access; Doctors have direct clinical access.
             </span>
           </div>
         </div>
@@ -449,13 +589,13 @@ export const LoginPage: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             </div>
 
             <p style={{ fontSize: '12px', color: '#526b78', lineHeight: 1.5, marginBottom: '16px' }}>
-              Access is restricted to authorized clinic staff. For prototype testing, you can click
-              any pre-configured account:
+              Access is restricted to clinic staff and receptionists. For quick login, you can click
+              the pre-configured reception account:
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
               <div
-                onClick={() => fillQuickCredentials('priya.menon@dentalcare.example', 'admin123', 'doctor')}
+                onClick={() => fillQuickCredentials('admin', 'admin123')}
                 style={{
                   padding: '12px',
                   borderRadius: '10px',
@@ -468,7 +608,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <span style={{ fontSize: '13px', fontWeight: 600, color: '#183344' }}>
-                      Dr. Priya Menon
+                      Clinic Reception Terminal
                     </span>
                     <span
                       style={{
@@ -481,46 +621,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                         fontWeight: 600,
                       }}
                     >
-                      Doctor
-                    </span>
-                  </div>
-                  <span style={{ fontSize: '11px', color: '#2baad8', fontWeight: 600 }}>Use &rarr;</span>
-                </div>
-                <div style={{ fontSize: '11px', color: '#718692', marginTop: '4px' }}>
-                  <span>email: priya.menon@dentalcare.example</span>
-                  <span style={{ margin: '0 6px' }}>&middot;</span>
-                  <span>pass: admin123</span>
-                </div>
-              </div>
-
-              <div
-                onClick={() => fillQuickCredentials('admin', 'admin123', 'admin')}
-                style={{
-                  padding: '12px',
-                  borderRadius: '10px',
-                  border: '1px solid #dce8ea',
-                  cursor: 'pointer',
-                  backgroundColor: '#f3f9fa',
-                  transition: 'background-color 150ms',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#183344' }}>
-                      System Administrator
-                    </span>
-                    <span
-                      style={{
-                        marginLeft: '8px',
-                        fontSize: '10px',
-                        backgroundColor: '#ddf3fa',
-                        color: '#0c6f93',
-                        padding: '2px 6px',
-                        borderRadius: '4px',
-                        fontWeight: 600,
-                      }}
-                    >
-                      Admin
+                      All-in-One Desk
                     </span>
                   </div>
                   <span style={{ fontSize: '11px', color: '#2baad8', fontWeight: 600 }}>Use &rarr;</span>
@@ -533,7 +634,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onLoginSuccess }) => {
               </div>
 
               <div
-                onClick={() => fillQuickCredentials('admin', 'admin123', 'staff')}
+                onClick={() => fillQuickCredentials('priya', 'admin123')}
                 style={{
                   padding: '12px',
                   borderRadius: '10px',
@@ -546,26 +647,26 @@ export const LoginPage: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <span style={{ fontSize: '13px', fontWeight: 600, color: '#183344' }}>
-                      Clinic Staff / Reception
+                      Receptionist (Priya)
                     </span>
                     <span
                       style={{
                         marginLeft: '8px',
                         fontSize: '10px',
-                        backgroundColor: '#ddf3fa',
-                        color: '#0c6f93',
+                        backgroundColor: '#e6fcf5',
+                        color: '#047857',
                         padding: '2px 6px',
                         borderRadius: '4px',
                         fontWeight: 600,
                       }}
                     >
-                      Staff
+                      Reception Desk
                     </span>
                   </div>
                   <span style={{ fontSize: '11px', color: '#2baad8', fontWeight: 600 }}>Use &rarr;</span>
                 </div>
                 <div style={{ fontSize: '11px', color: '#718692', marginTop: '4px' }}>
-                  <span>user: admin</span>
+                  <span>user: priya</span>
                   <span style={{ margin: '0 6px' }}>&middot;</span>
                   <span>pass: admin123</span>
                 </div>

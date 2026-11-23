@@ -461,10 +461,17 @@ router.get('/analytics', authenticateToken, async (req: Request, res: Response) 
 // GET /api/reports/doctors - Doctor listing for dropdowns
 router.get('/doctors', authenticateToken, async (req: Request, res: Response) => {
   try {
+    const { all } = req.query;
+    const where: any = {};
+    if (all !== 'true') {
+      where.user = { isActive: true };
+    }
     const doctors = await prisma.doctor.findMany({
+      where,
       include: {
-        user: { select: { id: true, fullName: true, username: true, email: true, phone: true } },
+        user: { select: { id: true, fullName: true, username: true, email: true, phone: true, isActive: true, allowedModules: true } },
       },
+      orderBy: { user: { fullName: 'asc' } },
     });
     res.json({ success: true, doctors });
   } catch (err: any) {

@@ -48,6 +48,36 @@ router.get('/users-by-role', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/auth/available-doctors - Public listing of active clinic doctors for quick doctor portal login
+router.get('/available-doctors', async (req: Request, res: Response) => {
+  try {
+    const doctors = await prisma.doctor.findMany({
+      where: { user: { isActive: true } },
+      include: {
+        user: { select: { id: true, username: true, fullName: true, email: true, phone: true } },
+      },
+      orderBy: { user: { fullName: 'asc' } },
+    });
+
+    res.json({
+      success: true,
+      doctors: doctors.map((d) => ({
+        id: d.id,
+        userId: d.userId,
+        username: d.user.username,
+        name: d.user.fullName,
+        specialization: d.specialization,
+        consultationFee: d.consultationFee,
+        licenseNumber: d.licenseNumber,
+        phone: d.user.phone,
+        email: d.user.email,
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // POST /api/auth/login
 const loginSchema = z.object({
   username: z.string().min(1, 'Username is required'),
@@ -106,6 +136,7 @@ router.post('/login', async (req: Request, res: Response) => {
         email: user.email,
         phone: user.phone,
         role: user.role,
+        allowedModules: user.allowedModules,
         doctorProfile: user.doctorProfile,
       },
     });
@@ -140,6 +171,7 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response) => 
         email: user.email,
         phone: user.phone,
         role: user.role,
+        allowedModules: user.allowedModules,
         doctorProfile: user.doctorProfile,
       },
     });
@@ -160,6 +192,157 @@ router.get('/admin/users', authenticateToken, async (req: AuthRequest, res: Resp
     });
     res.json({ success: true, users });
   } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/auth/admin/doctors - Create Doctor with customizable login credentials
+const createDoctorSchema = z.object({
+  fullName: z.string().min(2, 'Doctor name is required'),
+  specialization: z.enum(['DENTAL', 'ORTHOPEDIC']).default('DENTAL'),
+  consultationFee: z.number().min(0).default(500),
+  phone: z.string().optional().or(z.literal('')).nullable(),
+  email: z.string().email().optional().or(z.literal('')).nullable(),
+  licenseNumber: z.string().optional().or(z.literal('')).nullable(),
+  username: z.string().optional().or(z.literal('')).nullable(),
+  password: z.string().optional().or(z.literal('')).nullable(),
+  isActive: z.boolean().optional().default(true),
+  allowedModules: z.union([z.array(z.string()), z.string()]).optional().nullable(),
+});
+
+router.post('/admin/doctors', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const data = createDoctorSchema.parse(req.body);
+
+    const internalUsername = data.username?.trim() || `doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const rawPassword = (data.password && data.password.trim()) || 'doctor123';
+    const passwordHash = await bcrypt.hash(rawPassword, 10);
+    const role = data.specialization === 'DENTAL' ? Role.DOCTOR_DENTAL : Role.DOCTOR_ORTHO;
+    const rawModules = Array.isArray(data.allowedModules)
+      ? JSON.stringify(data.allowedModules)
+      : (data.allowedModules ? String(data.allowedModules) : JSON.stringify(['appointments', 'operations', 'patients', 'dental-lab']));
+
+    const newDoctor = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          username: internalUsername,
+          passwordHash,
+          fullName: data.fullName.trim(),
+          email: data.email?.trim() || null,
+          phone: data.phone?.trim() || null,
+          role,
+          allowedModules: rawModules,
+          isActive: data.isActive !== false,
+        },
+      });
+
+      const doctor = await tx.doctor.create({
+        data: {
+          userId: user.id,
+          specialization: data.specialization as Specialization,
+          consultationFee: Number(data.consultationFee) || (data.specialization === 'DENTAL' ? 600 : 800),
+          licenseNumber: data.licenseNumber?.trim() || null,
+        },
+        include: {
+          user: true,
+        },
+      });
+
+      return doctor;
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `Doctor ${newDoctor.user.fullName} registered successfully`,
+      doctor: newDoctor,
+    });
+  } catch (err: any) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ success: false, errors: err.errors });
+    }
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// PUT /api/auth/admin/doctors/:id - Update Doctor details, fee, status & password
+const updateDoctorSchema = z.object({
+  fullName: z.string().min(2, 'Doctor name is required').optional(),
+  specialization: z.enum(['DENTAL', 'ORTHOPEDIC']).optional(),
+  consultationFee: z.number().min(0).optional(),
+  phone: z.string().optional().or(z.literal('')).nullable(),
+  email: z.string().email().optional().or(z.literal('')).nullable(),
+  licenseNumber: z.string().optional().or(z.literal('')).nullable(),
+  password: z.string().optional().or(z.literal('')).nullable(),
+  isActive: z.boolean().optional(),
+  allowedModules: z.union([z.array(z.string()), z.string()]).optional().nullable(),
+});
+
+router.put('/admin/doctors/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const data = updateDoctorSchema.parse(req.body);
+
+    const doctor = await prisma.doctor.findFirst({
+      where: {
+        OR: [{ id }, { userId: id }],
+      },
+      include: { user: true },
+    });
+
+    if (!doctor) {
+      return res.status(404).json({ success: false, message: 'Doctor not found' });
+    }
+
+    const updatedDoctor = await prisma.$transaction(async (tx) => {
+      // Update User fields
+      const userUpdate: any = {};
+      if (data.fullName !== undefined) userUpdate.fullName = data.fullName.trim();
+      if (data.email !== undefined) userUpdate.email = data.email?.trim() || null;
+      if (data.phone !== undefined) userUpdate.phone = data.phone?.trim() || null;
+      if (data.isActive !== undefined) userUpdate.isActive = data.isActive;
+      if (data.specialization !== undefined) {
+        userUpdate.role = data.specialization === 'DENTAL' ? Role.DOCTOR_DENTAL : Role.DOCTOR_ORTHO;
+      }
+      if (data.allowedModules !== undefined) {
+        userUpdate.allowedModules = Array.isArray(data.allowedModules)
+          ? JSON.stringify(data.allowedModules)
+          : (data.allowedModules ? String(data.allowedModules) : null);
+      }
+      if (data.password && data.password.trim()) {
+        userUpdate.passwordHash = await bcrypt.hash(data.password.trim(), 10);
+      }
+
+      if (Object.keys(userUpdate).length > 0) {
+        await tx.user.update({
+          where: { id: doctor.userId },
+          data: userUpdate,
+        });
+      }
+
+      // Update Doctor fields
+      const docUpdate: any = {};
+      if (data.specialization !== undefined) docUpdate.specialization = data.specialization as Specialization;
+      if (data.consultationFee !== undefined) docUpdate.consultationFee = Number(data.consultationFee);
+      if (data.licenseNumber !== undefined) docUpdate.licenseNumber = data.licenseNumber?.trim() || null;
+
+      const d = await tx.doctor.update({
+        where: { id: doctor.id },
+        data: docUpdate,
+        include: { user: true },
+      });
+
+      return d;
+    });
+
+    res.json({
+      success: true,
+      message: `Doctor ${updatedDoctor.user.fullName} updated successfully`,
+      doctor: updatedDoctor,
+    });
+  } catch (err: any) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ success: false, errors: err.errors });
+    }
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -319,6 +502,42 @@ router.put('/admin/users/:id', authenticateToken, async (req: AuthRequest, res: 
     if (err instanceof z.ZodError) {
       return res.status(400).json({ success: false, errors: err.errors });
     }
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// DELETE /api/auth/admin/doctors/:id - Delete or safely deactivate doctor
+router.delete('/admin/doctors/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const doctor = await prisma.doctor.findFirst({
+      where: {
+        OR: [{ id }, { userId: id }],
+      },
+      include: { user: true },
+    });
+
+    if (!doctor) {
+      return res.status(404).json({ success: false, message: 'Doctor not found' });
+    }
+
+    try {
+      await prisma.doctor.delete({ where: { id: doctor.id } });
+      await prisma.user.delete({ where: { id: doctor.userId } });
+      return res.json({ success: true, message: `Doctor ${doctor.user.fullName} removed permanently.` });
+    } catch (fkErr) {
+      // Linked clinical or billing records exist - deactivate safely
+      await prisma.user.update({
+        where: { id: doctor.userId },
+        data: { isActive: false },
+      });
+      return res.json({
+        success: true,
+        message: `Doctor ${doctor.user.fullName} has historical clinical or billing records, so their profile was safely deactivated.`,
+      });
+    }
+  } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
 });

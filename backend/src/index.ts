@@ -19,6 +19,7 @@ import operationRoutes from './modules/operations/operations.routes';
 import reportsRoutes from './modules/reports/reports.routes';
 import dentalChartRoutes from './modules/dental-chart/dental-chart.routes';
 import labRoutes from './modules/lab/lab.routes';
+import { startAppointmentReminderScheduler } from './services/reminderScheduler';
 
 dotenv.config();
 
@@ -94,4 +95,5 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 
 server.listen(PORT, () => {
   console.log(`[Clinic Server] Running on http://localhost:${PORT}`);
+  startAppointmentReminderScheduler();
 });

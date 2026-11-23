@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../../config/prisma';
 import { authenticateToken } from '../../middleware/auth';
 import { emitRealtimeEvent } from '../../sockets';
-import { PaymentMode, PaymentStatus } from '@prisma/client';
+import { PaymentMode, PaymentStatus, AppointmentStatus } from '@prisma/client';
 
 const router = Router();
 
@@ -91,13 +91,35 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
 
     const invoiceNumber = await generateBillNumber();
 
+    // Auto-detect appointment if not explicitly passed: find today's active/completed unbilled appointment for this patient
+    let targetAppointmentId = data.appointmentId || null;
+    if (!targetAppointmentId) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
+      const unbilledApt = await prisma.appointment.findFirst({
+        where: {
+          patientId: data.patientId,
+          appointmentDate: { gte: todayStart, lte: todayEnd },
+          status: { not: AppointmentStatus.CANCELLED },
+          consultationBill: null,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (unbilledApt) {
+        targetAppointmentId = unbilledApt.id;
+      }
+    }
+
     const result = await prisma.$transaction(async (tx) => {
       const bill = await tx.consultationBill.create({
         data: {
           invoiceNumber,
           patientId: data.patientId,
           doctorId: data.doctorId,
-          appointmentId: data.appointmentId || null,
+          appointmentId: targetAppointmentId,
           consultationFee: data.consultationFee,
           discount: data.discount,
           taxRate: data.taxRate,
@@ -112,6 +134,14 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
           doctor: { include: { user: { select: { fullName: true } } } },
         },
       });
+
+      // Mark the associated appointment as COMPLETED
+      if (targetAppointmentId) {
+        await tx.appointment.update({
+          where: { id: targetAppointmentId },
+          data: { status: AppointmentStatus.COMPLETED },
+        });
+      }
 
       // Record payment receipt if paidAmount > 0
       let paymentRecord = null;
@@ -133,6 +163,22 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
     });
 
     emitRealtimeEvent('billing:consultation-created', result.bill);
+
+    // Emit real-time appointment update so AppointmentModule updates live and clears Unbilled
+    if (targetAppointmentId) {
+      const updatedApt = await prisma.appointment.findUnique({
+        where: { id: targetAppointmentId },
+        include: {
+          patient: { select: { id: true, name: true, patientCode: true, mobile: true, gender: true, age: true } },
+          doctor: { include: { user: { select: { fullName: true } } } },
+          consultationBill: true,
+          clinicalNote: { select: { id: true } },
+        },
+      });
+      if (updatedApt) {
+        emitRealtimeEvent('appointment:updated', updatedApt);
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -198,6 +244,21 @@ router.post('/:id/payment', authenticateToken, async (req: Request, res: Respons
     });
 
     emitRealtimeEvent('billing:payment-received', result.updatedBill);
+
+    if (bill.appointmentId) {
+      const updatedApt = await prisma.appointment.findUnique({
+        where: { id: bill.appointmentId },
+        include: {
+          patient: { select: { id: true, name: true, patientCode: true, mobile: true, gender: true, age: true } },
+          doctor: { include: { user: { select: { fullName: true } } } },
+          consultationBill: true,
+          clinicalNote: { select: { id: true } },
+        },
+      });
+      if (updatedApt) {
+        emitRealtimeEvent('appointment:updated', updatedApt);
+      }
+    }
 
     res.json({
       success: true,

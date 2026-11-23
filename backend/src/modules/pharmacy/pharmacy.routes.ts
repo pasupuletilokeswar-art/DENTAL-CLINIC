@@ -72,37 +72,289 @@ router.get('/medicines', authenticateToken, async (req: Request, res: Response) 
   }
 });
 
-// POST /api/pharmacy/medicines
+// POST /api/pharmacy/medicines (With support for Opening Stock & Batch)
 router.post('/medicines', authenticateToken, async (req: Request, res: Response) => {
   try {
     const data = medicineMasterSchema.parse(req.body);
+    const { openingStock, batchNumber, expiryDate, buyingPrice, mrp, sellingPrice, itemCodeCustom } = req.body;
 
     const count = await prisma.medicineMaster.count();
-    const itemCode = `MED-${(count + 1).toString().padStart(5, '0')}`;
+    const itemCode = itemCodeCustom && itemCodeCustom.trim() !== ''
+      ? itemCodeCustom.trim()
+      : `MED-${(count + 1).toString().padStart(5, '0')}`;
 
-    const medicine = await prisma.medicineMaster.create({
-      data: {
-        itemCode,
-        medicineName: data.medicineName,
-        brandName: data.brandName || null,
-        manufacturer: data.manufacturer || null,
-        barcode: data.barcode || null,
-        hsnCode: data.hsnCode || null,
-        packageInfo: data.packageInfo || null,
-        buyingUnit: data.buyingUnit,
-        sellingUnit: data.sellingUnit,
-        unitRatio: data.unitRatio,
-        medicineType: data.medicineType,
-        strength: data.strength || null,
-        prescriptionType: data.prescriptionType,
-        reorderLevel: data.reorderLevel,
-        specialization: data.specialization || null,
-      },
+    const medicine = await prisma.$transaction(async (tx) => {
+      const createdMed = await tx.medicineMaster.create({
+        data: {
+          itemCode,
+          medicineName: data.medicineName,
+          brandName: data.brandName || null,
+          manufacturer: data.manufacturer || null,
+          barcode: data.barcode || null,
+          hsnCode: data.hsnCode || null,
+          packageInfo: data.packageInfo || null,
+          buyingUnit: data.buyingUnit,
+          sellingUnit: data.sellingUnit,
+          unitRatio: data.unitRatio,
+          medicineType: data.medicineType,
+          strength: data.strength || null,
+          prescriptionType: data.prescriptionType,
+          reorderLevel: data.reorderLevel,
+          specialization: data.specialization || null,
+        },
+      });
+
+      // If opening stock is provided, create initial batch stock entry
+      if (openingStock && Number(openingStock) > 0 && batchNumber && batchNumber.trim() !== '') {
+        const qty = Number(openingStock);
+        const exp = expiryDate ? new Date(expiryDate) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+        const bPrice = Number(buyingPrice) || 0;
+        const mPrice = Number(mrp) || Number(sellingPrice) || 0;
+        const sPrice = Number(sellingPrice) || Number(mrp) || 0;
+
+        await tx.medicineBatchStock.create({
+          data: {
+            medicineId: createdMed.id,
+            batchNumber: batchNumber.trim(),
+            expiryDate: exp,
+            quantityInBase: qty,
+            purchasePrice: bPrice,
+            mrp: mPrice,
+            sellingPrice: sPrice,
+          },
+        });
+
+        await tx.stockMovement.create({
+          data: {
+            medicineId: createdMed.id,
+            batchNumber: batchNumber.trim(),
+            movementType: 'OPENING_STOCK',
+            quantityChange: qty,
+            previousStock: 0,
+            newStock: qty,
+            referenceId: createdMed.id,
+            remarks: `Initial opening inventory stock for ${createdMed.medicineName}`,
+          },
+        });
+      }
+
+      return tx.medicineMaster.findUnique({
+        where: { id: createdMed.id },
+        include: { batches: true },
+      });
     });
+
+    emitRealtimeEvent('pharmacy:inventory-updated', { type: 'MEDICINE_CREATED', medicine });
 
     res.status(201).json({ success: true, medicine });
   } catch (err: any) {
-    if (err instanceof z.ZodError) return res.status(400).json({ success: false, errors: err.errors });
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ success: false, message: err.errors[0]?.message || 'Validation error', errors: err.errors });
+    }
+    res.status(400).json({ success: false, message: err.message || 'Error creating pharmacy sale' });
+  }
+});
+
+// POST /api/pharmacy/medicines/bulk-import (CSV / Batch Array)
+router.post('/medicines/bulk-import', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const { items } = req.body;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: 'Please provide an array of items to import' });
+    }
+
+    let importedCount = 0;
+    const errors: string[] = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      try {
+        if (!item.medicineName) {
+          errors.push(`Row ${i + 1}: Missing medicine name`);
+          continue;
+        }
+
+        const existing = await prisma.medicineMaster.findFirst({
+          where: {
+            OR: [
+              { medicineName: { equals: item.medicineName, mode: 'insensitive' } },
+              ...(item.barcode ? [{ barcode: item.barcode }] : []),
+            ],
+          },
+        });
+
+        await prisma.$transaction(async (tx) => {
+          let targetMedId = existing?.id;
+
+          if (!existing) {
+            const count = await prisma.medicineMaster.count();
+            const itemCode = item.itemCode || `MED-${(count + 1).toString().padStart(5, '0')}`;
+            let packageInfo = item.packageInfo || '10X10';
+            if (item.shelfNo && !packageInfo.includes('Shelf:')) {
+              packageInfo = `${packageInfo} | Shelf: ${item.shelfNo}`;
+            }
+
+            const med = await tx.medicineMaster.create({
+              data: {
+                itemCode,
+                medicineName: item.medicineName.trim(),
+                brandName: item.brandName?.trim() || null,
+                manufacturer: item.manufacturer?.trim() || null,
+                barcode: item.barcode?.trim() || null,
+                hsnCode: item.hsnCode?.trim() || '3004 90 00',
+                packageInfo,
+                buyingUnit: item.buyingUnit?.trim() || 'STRIP',
+                sellingUnit: item.sellingUnit?.trim() || 'TABLET',
+                unitRatio: Number(item.unitRatio) || 1,
+                medicineType: item.medicineType || MedicineType.TABLET,
+                strength: item.strength?.trim() || null,
+                prescriptionType: item.prescriptionType || PrescriptionType.OTC,
+                reorderLevel: Number(item.reorderLevel) || 20,
+              },
+            });
+            targetMedId = med.id;
+          }
+
+          // Always create a batch if batchNumber or openingStock is provided
+          const qty = Number(item.openingStock) || 0;
+          const batchNumber = item.batchNumber && String(item.batchNumber).trim() !== ''
+            ? String(item.batchNumber).trim()
+            : (qty > 0 ? `BATCH-${Date.now().toString().slice(-4)}-${i + 1}` : null);
+
+          if (batchNumber && targetMedId) {
+            let exp = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000 * 2);
+            if (item.expiryDate) {
+              const parsedExp = new Date(item.expiryDate);
+              if (!isNaN(parsedExp.getTime())) {
+                exp = parsedExp;
+              }
+            }
+            const bPrice = Number(item.buyingPrice) || 0;
+            const mPrice = Number(item.mrp) || Number(item.sellingPrice) || 0;
+            const sPrice = Number(item.sellingPrice) || Number(item.mrp) || 0;
+
+            await tx.medicineBatchStock.create({
+              data: {
+                medicineId: targetMedId,
+                batchNumber,
+                expiryDate: exp,
+                quantityInBase: qty,
+                purchasePrice: bPrice,
+                mrp: mPrice,
+                sellingPrice: sPrice,
+              },
+            });
+
+            if (qty > 0) {
+              await tx.stockMovement.create({
+                data: {
+                  medicineId: targetMedId,
+                  batchNumber,
+                  movementType: existing ? 'PURCHASE' : 'OPENING_STOCK',
+                  quantityChange: qty,
+                  previousStock: 0,
+                  newStock: qty,
+                  referenceId: targetMedId,
+                  remarks: `CSV inventory import for ${item.medicineName} (${batchNumber})`,
+                },
+              });
+            }
+          }
+        });
+        importedCount++;
+      } catch (rowErr: any) {
+        errors.push(`Row ${i + 1} (${item.medicineName || 'Unknown'}): ${rowErr.message}`);
+      }
+    }
+
+    emitRealtimeEvent('pharmacy:inventory-updated', { type: 'BULK_IMPORT', count: importedCount });
+
+    res.json({
+      success: true,
+      message: `Successfully processed ${importedCount} items`,
+      importedCount,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/pharmacy/medicines/:id/batches (Direct Receive & Inward Shipment Batch)
+router.post('/medicines/:id/batches', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { batchNumber, expiryDate, quantityUnits, purchasePrice, mrp, sellingPrice } = req.body;
+
+    if (!batchNumber || !quantityUnits || Number(quantityUnits) <= 0) {
+      return res.status(400).json({ success: false, message: 'Batch number and quantity are required' });
+    }
+
+    const medicine = await prisma.medicineMaster.findUnique({ where: { id } });
+    if (!medicine) {
+      return res.status(404).json({ success: false, message: 'Medicine not found' });
+    }
+
+    const qty = Number(quantityUnits);
+    const exp = expiryDate ? new Date(expiryDate) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    const bPrice = Number(purchasePrice) || 0;
+    const mPrice = Number(mrp) || Number(sellingPrice) || 0;
+    const sPrice = Number(sellingPrice) || Number(mrp) || 0;
+
+    const batch = await prisma.$transaction(async (tx) => {
+      const createdBatch = await tx.medicineBatchStock.create({
+        data: {
+          medicineId: id,
+          batchNumber: String(batchNumber).trim(),
+          expiryDate: exp,
+          quantityInBase: qty,
+          purchasePrice: bPrice,
+          mrp: mPrice,
+          sellingPrice: sPrice,
+        },
+      });
+
+      await tx.stockMovement.create({
+        data: {
+          medicineId: id,
+          batchNumber: String(batchNumber).trim(),
+          movementType: 'PURCHASE',
+          quantityChange: qty,
+          previousStock: 0,
+          newStock: qty,
+          referenceId: createdBatch.id,
+          remarks: `Shipment received: batch ${batchNumber} for ${medicine.medicineName}`,
+        },
+      });
+
+      return createdBatch;
+    });
+
+    emitRealtimeEvent('pharmacy:inventory-updated', { type: 'BATCH_ADDED', medicineId: id, batch });
+
+    res.status(201).json({
+      success: true,
+      batch,
+      message: `Batch ${batchNumber} (${qty} units) received and added to inventory!`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/pharmacy/patient-prescriptions/:patientId
+router.get('/patient-prescriptions/:patientId', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const { patientId } = req.params;
+    const clinicalNotes = await prisma.clinicalNote.findMany({
+      where: { patientId },
+      include: { doctor: { include: { user: { select: { fullName: true } } } } },
+      orderBy: { consultationDate: 'desc' },
+      take: 5,
+    });
+
+    res.json({ success: true, clinicalNotes });
+  } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -282,8 +534,10 @@ router.post('/purchases', authenticateToken, async (req: Request, res: Response)
 
     res.status(201).json({ success: true, message: 'Stock received successfully', purchase });
   } catch (err: any) {
-    if (err instanceof z.ZodError) return res.status(400).json({ success: false, errors: err.errors });
-    res.status(500).json({ success: false, message: err.message });
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ success: false, message: err.errors[0]?.message || 'Validation error', errors: err.errors });
+    }
+    res.status(400).json({ success: false, message: err.message || 'Error creating pharmacy sale' });
   }
 });
 
@@ -292,9 +546,23 @@ router.post('/purchases', authenticateToken, async (req: Request, res: Response)
 // ==========================================
 const pharmacySaleSchema = z.object({
   patientId: z.string().optional().nullable(),
+  customerName: z.string().optional().nullable(),
+  customerPhone: z.string().optional().nullable(),
+  customerAge: z.string().optional().nullable(),
+  doctorId: z.string().optional().nullable(),
   discount: z.number().min(0).default(0),
   paidAmount: z.number().min(0),
-  paymentMode: z.nativeEnum(PaymentMode).default(PaymentMode.CASH),
+  paymentMode: z.preprocess((val) => {
+    if (typeof val === 'string') {
+      const u = val.toUpperCase().trim();
+      if (u === 'CASH') return PaymentMode.CASH;
+      if (u.includes('UPI')) return PaymentMode.UPI;
+      if (u.includes('CARD')) return PaymentMode.CARD;
+      if (u.includes('SPLIT')) return PaymentMode.CASH;
+      if (u.includes('BANK')) return PaymentMode.BANK_TRANSFER;
+    }
+    return val;
+  }, z.nativeEnum(PaymentMode).default(PaymentMode.CASH)),
   items: z.array(
     z.object({
       medicineId: z.string().min(1),
@@ -303,7 +571,11 @@ const pharmacySaleSchema = z.object({
       unitPrice: z.number().min(0),
       discount: z.number().min(0).default(0),
       gstRate: z.number().min(0).default(12),
-    })
+      taxRate: z.number().min(0).optional(),
+    }).transform((item) => ({
+      ...item,
+      gstRate: item.gstRate !== undefined ? item.gstRate : (item.taxRate !== undefined ? item.taxRate : 12),
+    }))
   ).min(1, 'At least one medicine item is required'),
 });
 
@@ -330,6 +602,13 @@ router.post('/sales', authenticateToken, async (req: Request, res: Response) => 
             `Insufficient stock for ${batchStock?.medicine.medicineName || 'medicine'} (Batch ${
               batchStock?.batchNumber || ''
             }). Available: ${batchStock?.quantityInBase || 0}`
+          );
+        }
+
+        // Strict Medical Safety: Strictly block sale of expired batches
+        if (new Date(batchStock.expiryDate).getTime() < Date.now()) {
+          throw new Error(
+            `DISPENSE BLOCKED: "${batchStock.medicine.medicineName}" (Batch ${batchStock.batchNumber}) has EXPIRED on ${batchStock.expiryDate.toISOString().slice(0, 10)}. Selling expired medicines is strictly prohibited.`
           );
         }
 
@@ -398,7 +677,7 @@ router.post('/sales', authenticateToken, async (req: Request, res: Response) => 
         });
       }
 
-      // 4. Create Receipt if paid > 0
+      // 4. Create Receipt if paid > 0 (store customer details in notes if walk-in)
       if (paidAmount > 0) {
         const pCount = await tx.payment.count();
         const receiptNumber = `RCP-${new Date().getFullYear()}-${(pCount + 1).toString().padStart(5, '0')}`;
@@ -408,12 +687,18 @@ router.post('/sales', authenticateToken, async (req: Request, res: Response) => 
             amount: paidAmount,
             paymentMode: data.paymentMode,
             pharmacySaleId: createdSale.id,
-            notes: `Pharmacy sale payment ${invoiceNumber}`,
+            notes: data.customerName
+              ? JSON.stringify({
+                  customerName: data.customerName,
+                  customerPhone: data.customerPhone || '',
+                  customerAge: data.customerAge || '',
+                })
+              : `Pharmacy sale payment ${invoiceNumber}`,
           },
         });
       }
 
-      return tx.pharmacySale.findUnique({
+      const foundSale: any = await tx.pharmacySale.findUnique({
         where: { id: createdSale.id },
         include: {
           patient: true,
@@ -421,29 +706,64 @@ router.post('/sales', authenticateToken, async (req: Request, res: Response) => 
           payments: true,
         },
       });
+
+      if (foundSale) {
+        foundSale.customerName = data.customerName || foundSale.patient?.name || 'Walk-in Customer';
+        foundSale.customerPhone = data.customerPhone || foundSale.patient?.mobile || '';
+        foundSale.customerAge = data.customerAge || foundSale.patient?.age || '';
+      }
+
+      return foundSale;
     });
 
     emitRealtimeEvent('pharmacy:inventory-updated', { type: 'SALE', sale });
 
     res.status(201).json({ success: true, message: 'Pharmacy sale completed', sale });
   } catch (err: any) {
-    if (err instanceof z.ZodError) return res.status(400).json({ success: false, errors: err.errors });
-    res.status(500).json({ success: false, message: err.message });
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ success: false, message: err.errors[0]?.message || 'Validation error', errors: err.errors });
+    }
+    res.status(400).json({ success: false, message: err.message || 'Error creating pharmacy sale' });
   }
 });
 
 // GET /api/pharmacy/sales
 router.get('/sales', authenticateToken, async (req: Request, res: Response) => {
   try {
-    const sales = await prisma.pharmacySale.findMany({
+    const rawSales = await prisma.pharmacySale.findMany({
       include: {
-        patient: { select: { id: true, name: true, patientCode: true, mobile: true } },
-        items: { include: { medicine: true } },
+        patient: { select: { id: true, name: true, patientCode: true, mobile: true, age: true } },
+        items: { include: { medicine: true, batchStock: true } },
         payments: true,
       },
       orderBy: { saleDate: 'desc' },
       take: 100,
     });
+
+    const sales = rawSales.map((s: any) => {
+      let custName = s.patient?.name;
+      let custPhone = s.patient?.mobile;
+      let custAge = s.patient?.age;
+
+      if (!custName && s.payments?.[0]?.notes) {
+        try {
+          const parsed = JSON.parse(s.payments[0].notes);
+          if (parsed.customerName) {
+            custName = parsed.customerName;
+            custPhone = parsed.customerPhone || '';
+            custAge = parsed.customerAge || '';
+          }
+        } catch {}
+      }
+
+      return {
+        ...s,
+        customerName: custName || 'Walk-in Customer',
+        customerPhone: custPhone || '',
+        customerAge: custAge || '',
+      };
+    });
+
     res.json({ success: true, sales });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });

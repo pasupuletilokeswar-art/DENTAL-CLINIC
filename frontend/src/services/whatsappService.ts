@@ -7,8 +7,50 @@ export const sendWhatsAppMessage = (phone: string, message: string) => {
     cleanPhone = `91${cleanPhone}`; // Default to Indian country code +91
   }
   const encodedText = encodeURIComponent(message);
-  const url = `https://wa.me/${cleanPhone}?text=${encodedText}`;
-  window.open(url, '_blank');
+  // Directly open WhatsApp Web using a single dedicated tab ('whatsapp_tab') to prevent multiple tabs competing and disconnecting
+  const url = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
+  const win = window.open(url, 'whatsapp_tab');
+  if (win) {
+    win.focus();
+  }
+};
+
+export const createAppointmentReminderMessage = (apt: any) => {
+  const aptDateFormatted = new Date(apt.appointmentDate).toLocaleDateString(undefined, {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+  const startTimeFormatted = new Date(apt.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const endTimeFormatted = new Date(apt.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  return `*HospAI Dental & Orthopedic Clinic*
+*Patient Appointment Reminder (1 Day Prior)*
+----------------------------------------
+Dear ${apt.patient?.name || 'Valued Patient'},
+
+This is a reminder from HospAI Dental Clinic about your scheduled appointment tomorrow:
+
+📅 Scheduled Date: ${aptDateFormatted}
+⏰ Time Slot: ${startTimeFormatted} - ${endTimeFormatted}
+👨‍⚕️ Doctor: Dr. ${apt.doctor?.user?.fullName || 'Specialist'} (${apt.specialization || 'Clinical'})
+🏥 Clinic: HospAI Dental & Orthopedic Clinic
+📋 Appointment Code: ${apt.appointmentCode}
+${apt.procedureName ? `🦷 Procedure / Reason: ${apt.procedureName}\n` : ''}----------------------------------------
+Please arrive 10 minutes prior to your time slot (${startTimeFormatted}) for registration.
+If you need to reschedule or need directions, reply directly to this message or call +91 98765 43210.
+We look forward to seeing you tomorrow!`;
+};
+
+export const sendAppointmentReminderWhatsApp = (apt: any) => {
+  const phone = apt.patient?.mobile || '';
+  if (!phone) {
+    alert(`Patient ${apt.patient?.name || ''} has no mobile number recorded.`);
+    return;
+  }
+  const msg = createAppointmentReminderMessage(apt);
+  sendWhatsAppMessage(phone, msg);
 };
 
 export const createConsultationBillMessage = (bill: any) => {

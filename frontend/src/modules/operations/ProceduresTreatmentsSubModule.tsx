@@ -24,11 +24,15 @@ import {
   Tag,
   CheckSquare,
   Sparkles,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import api from '../../services/api';
 import { Procedure, ProcedureMaster, Patient, Doctor } from '../../types';
 import { getSocket } from '../../services/socket';
 import { PatientSearchSelect } from '../../components/PatientSearchSelect';
+import { isSlotPast } from '../../services/timeUtils';
 
 export const STANDARD_PROCEDURE_CATEGORIES = [
   'Consultation & Examination',
@@ -115,12 +119,14 @@ export const PROCEDURE_CATEGORIES: ProcedureCategoryGroup[] = [
 interface ProceduresTreatmentsSubModuleProps {
   initialPatient?: Patient | null;
   onNavigateToBillingProcedure?: (procedure: Procedure) => void;
+  onNavigateToAppointments?: (patientId?: string) => void;
   onNavigateToHistory?: (patient: Patient) => void;
 }
 
 export const ProceduresTreatmentsSubModule: React.FC<ProceduresTreatmentsSubModuleProps> = ({
   initialPatient = null,
   onNavigateToBillingProcedure,
+  onNavigateToAppointments,
   onNavigateToHistory,
 }) => {
   const [procedures, setProcedures] = useState<Procedure[]>([]);
@@ -153,18 +159,258 @@ export const ProceduresTreatmentsSubModule: React.FC<ProceduresTreatmentsSubModu
   const [masterModalError, setMasterModalError] = useState<string | null>(null);
   const [masterModalSubmitting, setMasterModalSubmitting] = useState(false);
 
+  // Standard clinic time slots for procedure scheduling
+  const TIME_SLOTS = [
+    '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM',
+    '12:00 PM', '12:30 PM', '02:00 PM', '02:30 PM', '03:00 PM', '03:30 PM',
+    '04:00 PM', '04:30 PM', '05:00 PM', '05:30 PM', '06:00 PM', '06:30 PM',
+  ];
+
+  const todayStr = useMemo(() => new Date().toISOString().substring(0, 10), []);
+
   // Create Procedure Form State
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(initialPatient);
+  const [patientDoctorNotice, setPatientDoctorNotice] = useState<string | null>(null);
   const [selectedProcedures, setSelectedProcedures] = useState<string[]>([]);
   const [procedureSearch, setProcedureSearch] = useState('');
   const [customProcedureInput, setCustomProcedureInput] = useState('');
   const [procedureDate, setProcedureDate] = useState(new Date().toISOString().substring(0, 10));
+  const [procedureTime, setProcedureTime] = useState('10:00 AM');
   const [toothNumber, setToothNumber] = useState('');
   const [doctorId, setDoctorId] = useState('');
   const [customDentistName, setCustomDentistName] = useState('');
   const [description, setDescription] = useState('');
   const [status, setStatus] = useState<'Planned' | 'In Progress' | 'Completed'>('Planned');
   const [charges, setCharges] = useState(0);
+
+  // Interactive Calendar & Slot Modal State
+  const [showCalendarModal, setShowCalendarModal] = useState(false);
+  const [calendarCurrentMonth, setCalendarCurrentMonth] = useState<Date>(new Date());
+  const [calendarPickedDate, setCalendarPickedDate] = useState<string>(new Date().toISOString().substring(0, 10));
+  const [calendarPickedTime, setCalendarPickedTime] = useState<string>('10:00 AM');
+  const [autoScheduleAppointment, setAutoScheduleAppointment] = useState(true);
+  const [bookedAppointmentCode, setBookedAppointmentCode] = useState<string | null>(null);
+  const [bookingAppointmentLoading, setBookingAppointmentLoading] = useState(false);
+  const [calendarBookedNotice, setCalendarBookedNotice] = useState<string | null>(null);
+  const [calendarSummary, setCalendarSummary] = useState<Record<string, { total: number; dental: number; ortho: number; completed: number }>>({});
+  const [dayAppointments, setDayAppointments] = useState<any[]>([]);
+  const [loadingDayAppointments, setLoadingDayAppointments] = useState(false);
+
+  // Auto-fetch consulting doctor when patient is selected
+  const handlePatientSelect = async (patient: Patient | null) => {
+    setSelectedPatient(patient);
+    setPatientDoctorNotice(null);
+    if (!patient) return;
+    try {
+      const res = await api.get(`/appointments/patient-active/${patient.id}`);
+      if (res.data.success && res.data.doctorId) {
+        setDoctorId(res.data.doctorId);
+        const docName = res.data.doctor?.user?.fullName;
+        if (docName) {
+          setPatientDoctorNotice(`Doctor auto-assigned: Dr. ${docName}`);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to auto-fetch patient doctor:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedPatient?.id && !doctorId) {
+      api.get(`/appointments/patient-active/${selectedPatient.id}`)
+        .then((res) => {
+          if (res.data.success && res.data.doctorId) {
+            setDoctorId(res.data.doctorId);
+            const docName = res.data.doctor?.user?.fullName;
+            if (docName) {
+              setPatientDoctorNotice(`Doctor auto-assigned: Dr. ${docName}`);
+            }
+          }
+        })
+        .catch((err) => console.error('Error auto-fetching doctor for patient in procedure:', err));
+    }
+  }, [selectedPatient?.id, doctorId]);
+
+  // Calendar Presets
+  const applyCalendarDatePreset = (daysFromNow: number) => {
+    const target = new Date();
+    target.setDate(target.getDate() + daysFromNow);
+    const dateStr = target.toISOString().substring(0, 10);
+    setCalendarPickedDate(dateStr);
+    setCalendarCurrentMonth(target);
+  };
+
+  // Live Month Summary for Procedures Calendar
+  useEffect(() => {
+    const fetchSummary = async () => {
+      try {
+        const y = calendarCurrentMonth.getFullYear();
+        const m = calendarCurrentMonth.getMonth() + 1;
+        const monthKey = `${y}-${String(m).padStart(2, '0')}`;
+        const res = await api.get('/appointments/calendar-summary', {
+          params: {
+            month: monthKey,
+            doctorId: doctorId || undefined,
+          },
+        });
+        if (res.data.success) {
+          setCalendarSummary(res.data.summary || {});
+        }
+      } catch (e) {
+        // background sync
+      }
+    };
+    if (showCalendarModal) {
+      fetchSummary();
+    }
+  }, [calendarCurrentMonth, showCalendarModal, doctorId]);
+
+  // Live Day Appointments for slot availability
+  useEffect(() => {
+    const fetchDayApts = async () => {
+      if (!calendarPickedDate) return;
+      try {
+        setLoadingDayAppointments(true);
+        const res = await api.get('/appointments', {
+          params: {
+            date: calendarPickedDate,
+            doctorId: doctorId || undefined,
+          },
+        });
+        if (res.data.success) {
+          setDayAppointments(res.data.appointments || []);
+        }
+      } catch (e) {
+        // background sync
+      } finally {
+        setLoadingDayAppointments(false);
+      }
+    };
+    if (showCalendarModal) {
+      fetchDayApts();
+    }
+  }, [calendarPickedDate, showCalendarModal, doctorId]);
+
+  // Auto-adjust calendarPickedTime to first upcoming slot on today
+  useEffect(() => {
+    if (showCalendarModal) {
+      const visible = TIME_SLOTS.filter((s) => !isSlotPast(s, calendarPickedDate));
+      if (!calendarPickedTime || isSlotPast(calendarPickedTime, calendarPickedDate)) {
+        const firstFree = visible[0] || '';
+        if (firstFree && firstFree !== calendarPickedTime) {
+          setCalendarPickedTime(firstFree);
+        }
+      }
+    }
+  }, [calendarPickedDate, showCalendarModal]);
+
+  // Compute month cells for Interactive Calendar modal
+  const calendarDays = useMemo(() => {
+    const year = calendarCurrentMonth.getFullYear();
+    const month = calendarCurrentMonth.getMonth();
+    const firstDay = new Date(year, month, 1).getDay();
+    const totalDays = new Date(year, month + 1, 0).getDate();
+    const prevMonthTotalDays = new Date(year, month, 0).getDate();
+
+    const days: Array<{
+      dateStr: string;
+      dayNum: number;
+      isCurrentMonth: boolean;
+      isToday: boolean;
+      summary?: { total: number; dental: number; ortho: number; completed: number };
+    }> = [];
+
+    for (let i = firstDay - 1; i >= 0; i--) {
+      const d = prevMonthTotalDays - i;
+      const m = month === 0 ? 12 : month;
+      const y = month === 0 ? year - 1 : year;
+      const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      days.push({
+        dateStr,
+        dayNum: d,
+        isCurrentMonth: false,
+        isToday: dateStr === todayStr,
+        summary: calendarSummary[dateStr],
+      });
+    }
+
+    for (let d = 1; d <= totalDays; d++) {
+      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      days.push({
+        dateStr,
+        dayNum: d,
+        isCurrentMonth: true,
+        isToday: dateStr === todayStr,
+        summary: calendarSummary[dateStr],
+      });
+    }
+
+    const remaining = 42 - days.length;
+    for (let d = 1; d <= remaining; d++) {
+      const m = month + 2 > 12 ? 1 : month + 2;
+      const y = month + 2 > 12 ? year + 1 : year;
+      const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      days.push({
+        dateStr,
+        dayNum: d,
+        isCurrentMonth: false,
+        isToday: dateStr === todayStr,
+        summary: calendarSummary[dateStr],
+      });
+    }
+
+    return days;
+  }, [calendarCurrentMonth, todayStr, calendarSummary]);
+
+  const handleConfirmCalendarSelection = async () => {
+    if (!calendarPickedDate) return;
+    setProcedureDate(calendarPickedDate);
+    setProcedureTime(calendarPickedTime);
+
+    const doctorIdToUse = doctorId || (doctors.length > 0 ? doctors[0].id : null);
+    if (autoScheduleAppointment && selectedPatient && doctorIdToUse) {
+      try {
+        setBookingAppointmentLoading(true);
+        const doc = doctors.find((d) => d.id === doctorIdToUse);
+        const spec = doc?.specialization || 'DENTAL';
+        const [timePart, modifier] = (calendarPickedTime || '10:00 AM').split(' ');
+        let [hours, minutes] = timePart.split(':').map(Number);
+        if (modifier === 'PM' && hours < 12) hours += 12;
+        if (modifier === 'AM' && hours === 12) hours = 0;
+        const [y, m, d] = calendarPickedDate.split('-').map(Number);
+        const startDate = new Date(y, m - 1, d, hours, minutes, 0);
+
+        const procName = selectedProcedures[0] || customProcedureInput.trim() || 'Procedure Treatment';
+        const aptRes = await api.post('/appointments', {
+          patientId: selectedPatient.id,
+          doctorId: doctorIdToUse,
+          specialization: spec,
+          appointmentDate: calendarPickedDate,
+          startTime: startDate.toISOString(),
+          durationMinutes: 30,
+          visitType: 'PROCEDURE',
+          procedureName: procName,
+          reasonForVisit: `Procedure Slot: ${selectedProcedures.join(', ') || procName}`,
+        });
+
+        if (aptRes.data.success) {
+          const aptCode = aptRes.data.appointment?.appointmentCode || 'APT-SCHEDULED';
+          setBookedAppointmentCode(aptCode);
+          setCalendarBookedNotice(
+            `Appointment (${aptCode}) successfully booked for ${selectedPatient.name} on ${calendarPickedDate} at ${calendarPickedTime} with Dr. ${doc?.user?.fullName || 'Doctor'}! It immediately reflects in the Appointments Module.`
+          );
+          setTimeout(() => setCalendarBookedNotice(null), 7000);
+        }
+      } catch (aptErr: any) {
+        console.warn('Appointment booking notice:', aptErr.response?.data?.message);
+        alert(aptErr.response?.data?.message || 'Could not schedule appointment slot.');
+      } finally {
+        setBookingAppointmentLoading(false);
+      }
+    }
+
+    setShowCalendarModal(false);
+  };
 
   // Medications Prescribed (Clinical Notes Only - not linked to pharmacy or billing)
   const [medications, setMedications] = useState<
@@ -590,10 +836,45 @@ export const ProceduresTreatmentsSubModule: React.FC<ProceduresTreatmentsSubModu
       });
 
       if (res.data.success) {
+        let appointmentNotice = '';
+        if (bookedAppointmentCode) {
+          appointmentNotice = ` & Linked to Appointment (${bookedAppointmentCode})`;
+        } else if (autoScheduleAppointment && selectedPatient && (doctorId || doctors[0]?.id)) {
+          const doctorIdToUse = doctorId || doctors[0].id;
+          try {
+            const doc = doctors.find((d) => d.id === doctorIdToUse);
+            const spec = doc?.specialization || 'DENTAL';
+            const [timePart, modifier] = (procedureTime || '10:00 AM').split(' ');
+            let [hours, minutes] = timePart.split(':').map(Number);
+            if (modifier === 'PM' && hours < 12) hours += 12;
+            if (modifier === 'AM' && hours === 12) hours = 0;
+            const [y, m, d] = procedureDate.split('-').map(Number);
+            const startDate = new Date(y, m - 1, d, hours, minutes, 0);
+
+            const aptRes = await api.post('/appointments', {
+              patientId: selectedPatient.id,
+              doctorId: doctorIdToUse,
+              specialization: spec,
+              appointmentDate: procedureDate,
+              startTime: startDate.toISOString(),
+              durationMinutes: 30,
+              visitType: 'PROCEDURE',
+              procedureName: selectedProcedures[0] || 'Procedure',
+              reasonForVisit: `Procedure: ${selectedProcedures.join(', ') || 'Procedure'}`,
+            });
+            if (aptRes.data.success) {
+              const aptCode = aptRes.data.appointment?.appointmentCode || 'APT-SCHEDULED';
+              appointmentNotice = ` & Appointment (${aptCode}) scheduled for ${procedureDate} at ${procedureTime}`;
+            }
+          } catch (aptErr: any) {
+            console.warn('Appointment auto-booking notice:', aptErr.response?.data?.message);
+          }
+        }
+
         setFormSuccess(
           selectedProcedures.length === 1
-            ? `Procedure "${selectedProcedures[0]}" recorded successfully for ${selectedPatient.name}!`
-            : `${selectedProcedures.length} procedures recorded successfully for ${selectedPatient.name}!`
+            ? `Procedure "${selectedProcedures[0]}" recorded successfully for ${selectedPatient.name}${appointmentNotice}!`
+            : `${selectedProcedures.length} procedures recorded successfully for ${selectedPatient.name}${appointmentNotice}!`
         );
         fetchData();
         setTimeout(() => {
@@ -641,6 +922,34 @@ export const ProceduresTreatmentsSubModule: React.FC<ProceduresTreatmentsSubModu
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {/* Appointment Slot Booked Toast Banner */}
+      {calendarBookedNotice && (
+        <div className="p-4 bg-gradient-to-r from-blue-50 to-sky-50 border border-blue-200 rounded-2xl text-blue-950 text-xs flex items-center justify-between shadow-xs animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-5 h-5 text-blue-600 shrink-0" />
+            <span className="font-semibold">{calendarBookedNotice}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {onNavigateToAppointments && (
+              <button
+                type="button"
+                onClick={() => onNavigateToAppointments(selectedPatient?.id)}
+                className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition cursor-pointer"
+              >
+                Go to Appointments
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setCalendarBookedNotice(null)}
+              className="text-blue-700 hover:text-blue-900 p-1"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
 
@@ -903,8 +1212,14 @@ export const ProceduresTreatmentsSubModule: React.FC<ProceduresTreatmentsSubModu
                   </label>
                   <PatientSearchSelect
                     selectedPatient={selectedPatient}
-                    onSelect={(p) => setSelectedPatient(p)}
+                    onSelect={(p) => handlePatientSelect(p)}
                   />
+                  {patientDoctorNotice && (
+                    <div className="mt-1.5 px-3 py-1.5 bg-purple-50 border border-purple-200 rounded-xl text-xs font-semibold text-purple-800 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                      <span>{patientDoctorNotice}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -1323,17 +1638,43 @@ export const ProceduresTreatmentsSubModule: React.FC<ProceduresTreatmentsSubModu
               </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                    Procedure Date <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    value={procedureDate}
-                    onChange={(e) => setProcedureDate(e.target.value)}
-                    className="w-full text-xs p-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                    required
-                  />
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Procedure Date & Slot <span className="text-rose-500">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCalendarPickedDate(procedureDate || todayStr);
+                        setCalendarCurrentMonth(procedureDate ? new Date(procedureDate) : new Date());
+                        setCalendarPickedTime(procedureTime || '10:00 AM');
+                        setShowCalendarModal(true);
+                      }}
+                      className="px-2 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-[10px] font-bold border border-blue-200 transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                      title="Select date and slot from interactive calendar"
+                    >
+                      <CalendarDays className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Interactive Calendar</span>
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="date"
+                      value={procedureDate}
+                      onChange={(e) => setProcedureDate(e.target.value)}
+                      className="w-full text-xs p-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                      required
+                    />
+                    <span className="text-xs font-bold text-blue-800 bg-blue-50 border border-blue-200 px-2.5 py-2 rounded-xl whitespace-nowrap">
+                      {procedureTime}
+                    </span>
+                  </div>
+                  {autoScheduleAppointment && (
+                    <p className="text-[10px] text-blue-600 font-medium">
+                      ✓ Auto-books appointment in Appointments Hub
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -1844,6 +2185,272 @@ export const ProceduresTreatmentsSubModule: React.FC<ProceduresTreatmentsSubModu
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* INTERACTIVE CALENDAR & SLOT MODAL FOR PROCEDURES               */}
+      {/* ============================================================== */}
+      {showCalendarModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 max-h-[95vh] overflow-y-auto font-sans animate-in fade-in zoom-in-95">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold shadow-md shadow-blue-500/20">
+                  <CalendarDays className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">Interactive Calendar & Slot Picker</h3>
+                  <p className="text-xs text-slate-400">
+                    Schedule procedure visit date & real-time doctor availability slot
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCalendarModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Quick Presets Bar */}
+            <div className="mt-4 flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">Quick Select:</span>
+              <button
+                type="button"
+                onClick={() => applyCalendarDatePreset(1)}
+                className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-700 rounded-lg text-xs font-semibold border border-slate-200 transition cursor-pointer"
+              >
+                Tomorrow
+              </button>
+              <button
+                type="button"
+                onClick={() => applyCalendarDatePreset(3)}
+                className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-700 rounded-lg text-xs font-semibold border border-slate-200 transition cursor-pointer"
+              >
+                +3 Days
+              </button>
+              <button
+                type="button"
+                onClick={() => applyCalendarDatePreset(7)}
+                className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-700 rounded-lg text-xs font-semibold border border-slate-200 transition cursor-pointer"
+              >
+                +1 Week
+              </button>
+              <button
+                type="button"
+                onClick={() => applyCalendarDatePreset(14)}
+                className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-700 rounded-lg text-xs font-semibold border border-slate-200 transition cursor-pointer"
+              >
+                +2 Weeks
+              </button>
+            </div>
+
+            {/* Month Navigation */}
+            <div className="mt-4 p-4 bg-slate-50 rounded-2xl border border-slate-200/80">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-black text-slate-800 font-sans">
+                    {calendarCurrentMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+                  </h4>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      setCalendarCurrentMonth(now);
+                      setCalendarPickedDate(todayStr);
+                    }}
+                    className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 text-[11px] font-bold rounded-lg border border-slate-200 cursor-pointer"
+                  >
+                    Today
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCalendarCurrentMonth(new Date(calendarCurrentMonth.getFullYear(), calendarCurrentMonth.getMonth() - 1, 1));
+                    }}
+                    className="p-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg border border-slate-200 cursor-pointer"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCalendarCurrentMonth(new Date(calendarCurrentMonth.getFullYear(), calendarCurrentMonth.getMonth() + 1, 1));
+                    }}
+                    className="p-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg border border-slate-200 cursor-pointer"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Weekday headers */}
+              <div className="grid grid-cols-7 gap-1 text-center py-2 text-[10px] font-black uppercase text-slate-400">
+                <span className="text-rose-500">Sun</span>
+                <span>Mon</span>
+                <span>Tue</span>
+                <span>Wed</span>
+                <span>Thu</span>
+                <span>Fri</span>
+                <span className="text-rose-500">Sat</span>
+              </div>
+
+              {/* Calendar Grid Cells */}
+              <div className="grid grid-cols-7 gap-1.5">
+                {calendarDays.map((cell, idx) => {
+                  const isPast = cell.dateStr < todayStr;
+                  const isPicked = cell.dateStr === calendarPickedDate;
+                  const bookingCount = cell.summary?.total || 0;
+
+                  return (
+                    <button
+                      type="button"
+                      key={idx}
+                      onClick={() => setCalendarPickedDate(cell.dateStr)}
+                      className={`p-2 rounded-xl text-center text-xs font-bold transition flex flex-col items-center justify-between min-h-[52px] cursor-pointer border ${
+                        isPicked
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-500/25 ring-2 ring-blue-400/40'
+                          : cell.isToday
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-black'
+                          : cell.isCurrentMonth
+                          ? 'bg-white hover:bg-blue-50/70 text-slate-800 border-slate-200/80 hover:border-blue-300'
+                          : 'bg-slate-100/50 text-slate-300 border-transparent hover:bg-slate-100'
+                      } ${isPast ? 'opacity-60' : ''}`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-[11px] font-bold">{cell.dayNum}</span>
+                        {cell.isToday && (
+                          <span className={`w-1.5 h-1.5 rounded-full ${isPicked ? 'bg-white' : 'bg-emerald-500'}`} />
+                        )}
+                      </div>
+
+                      {bookingCount > 0 && (
+                        <span
+                          className={`text-[9px] px-1 py-0.2 rounded font-extrabold w-full text-center truncate ${
+                            isPicked ? 'bg-white/20 text-white' : 'bg-sky-100 text-sky-800'
+                          }`}
+                        >
+                          {bookingCount} {bookingCount === 1 ? 'appt' : 'appts'}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Time Slot Selection & Schedule Conflict Check */}
+            <div className="mt-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-slate-700">
+                  Doctor Time Slots ({calendarPickedDate})
+                </label>
+                <span className="text-[10px] text-slate-400 font-medium">
+                  {dayAppointments.length} existing booked on this date
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {(() => {
+                  const visibleSlots = TIME_SLOTS.filter((s) => !isSlotPast(s, calendarPickedDate));
+                  if (visibleSlots.length === 0) {
+                    return (
+                      <div className="col-span-full p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-center text-xs text-amber-800 font-semibold">
+                        All time slots for today have already concluded. Please choose tomorrow or an upcoming date from the calendar.
+                      </div>
+                    );
+                  }
+                  return visibleSlots.map((slot) => {
+                    const isBooked = dayAppointments.some((a) => {
+                      const aptTime = new Date(a.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                      return aptTime === slot;
+                    });
+
+                    const isSelected = calendarPickedTime === slot;
+
+                    return (
+                      <button
+                        type="button"
+                        key={slot}
+                        disabled={isBooked}
+                        onClick={() => setCalendarPickedTime(slot)}
+                        className={`py-1.5 px-2.5 rounded-lg text-xs font-semibold border transition cursor-pointer flex items-center justify-between ${
+                          isSelected
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
+                            : isBooked
+                            ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed line-through'
+                            : 'bg-white hover:bg-blue-50/60 text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        <span>{slot}</span>
+                        {isBooked ? (
+                          <span className="text-[9px] text-rose-500 font-bold ml-1">Booked</span>
+                        ) : (
+                          <span className={`text-[9px] font-bold ml-1 ${isSelected ? 'text-blue-100' : 'text-emerald-600'}`}>
+                            Free
+                          </span>
+                        )}
+                      </button>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+
+            {/* Auto Schedule Appointment Option */}
+            {selectedPatient && (doctorId || doctors.length > 0) && (
+              <div className="mt-4 p-3 bg-blue-50/70 border border-blue-200 rounded-xl flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  id="procAutoBookAppt"
+                  checked={autoScheduleAppointment}
+                  onChange={(e) => setAutoScheduleAppointment(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
+                />
+                <label htmlFor="procAutoBookAppt" className="text-xs text-blue-950 font-medium cursor-pointer">
+                  <strong>Sync slot directly to Appointments Hub</strong>
+                  <br />
+                  <span className="text-[11px] text-blue-700">
+                    Immediately reserves procedure slot on {calendarPickedDate} at {calendarPickedTime}. Displays across reception calendar, doctor queue, and patient records in real-time.
+                  </span>
+                </label>
+              </div>
+            )}
+
+            {/* Footer Buttons */}
+            <div className="mt-5 pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs font-bold text-slate-700">
+                Selected: <span className="text-blue-700 font-mono">{calendarPickedDate}</span> ({calendarPickedTime})
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowCalendarModal(false)}
+                  className="px-4 py-2 border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-xl text-xs font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  disabled={bookingAppointmentLoading}
+                  onClick={handleConfirmCalendarSelection}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md shadow-blue-500/20 disabled:opacity-50"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{bookingAppointmentLoading ? 'Reserving Slot...' : 'Confirm Date & Slot'}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -28,18 +28,40 @@ import {
   LayoutGrid,
   List,
   Receipt,
+  Bell,
+  BellRing,
+  Send,
+  Pill,
+  Scissors,
 } from 'lucide-react';
 import api from '../../services/api';
 import { Appointment, Doctor, Patient } from '../../types';
 import { getSocket } from '../../services/socket';
 import { PatientSearchSelect } from '../../components/PatientSearchSelect';
-import { sendWhatsAppMessage } from '../../services/whatsappService';
+import { isSlotPast } from '../../services/timeUtils';
+import {
+  sendWhatsAppMessage,
+  createAppointmentReminderMessage,
+  sendAppointmentReminderWhatsApp,
+} from '../../services/whatsappService';
 
 interface AppointmentModuleProps {
   onNavigateToNotes?: (patientId?: string) => void;
   onNavigateToBilling?: (appointmentOrPatient?: any) => void;
   onNavigateToPatient?: (patientId: string) => void;
+  onNavigateToPharmacy?: (patientId?: string) => void;
+  onNavigateToProcedures?: (patientId?: string) => void;
 }
+
+// Clean helper to format doctor name and avoid "Dr. Dr. ..."
+export const formatDoctorName = (name?: string): string => {
+  if (!name) return 'Clinic Specialist';
+  const clean = name.trim();
+  if (clean.toLowerCase().startsWith('dr.') || clean.toLowerCase().startsWith('dr ')) {
+    return clean;
+  }
+  return `Dr. ${clean}`;
+};
 
 // Pure local calendar date formatter (prevents UTC timezone shift bug)
 export const formatLocalDateKey = (y: number, m: number, d: number): string =>
@@ -101,6 +123,8 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
   onNavigateToNotes,
   onNavigateToBilling,
   onNavigateToPatient,
+  onNavigateToPharmacy,
+  onNavigateToProcedures,
 }) => {
   // View mode: 'today' (live queue), 'calendar' (interactive month), 'upcoming' (future schedule)
   const [viewMode, setViewMode] = useState<'today' | 'calendar' | 'upcoming'>('today');
@@ -127,6 +151,27 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
   >({});
   const [loadingSummary, setLoadingSummary] = useState(false);
 
+  // Automated 1-Day Prior Reminders State
+  const [tomorrowReminders, setTomorrowReminders] = useState<{
+    tomorrowDateKey: string;
+    tomorrowDisplayDate: string;
+    totalAppointments: number;
+    pendingReminders: number;
+    sentReminders: number;
+    appointments: any[];
+  } | null>(null);
+  const [loadingTomorrowReminders, setLoadingTomorrowReminders] = useState(false);
+  const [dispatchingTomorrowReminders, setDispatchingTomorrowReminders] = useState(false);
+  const [showTomorrowDrawer, setShowTomorrowDrawer] = useState(false);
+
+  // Only appointments that NEED a reminder (filter out already-notified patients and consultation-done/in-progress patients)
+  const pendingTomorrowList = useMemo(() => {
+    if (!tomorrowReminders?.appointments) return [];
+    return tomorrowReminders.appointments.filter(
+      (apt: any) => !apt.reminderSent && (apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED')
+    );
+  }, [tomorrowReminders]);
+
   // Booking Modal State
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
@@ -134,6 +179,19 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
   const [checkingActiveAppointment, setCheckingActiveAppointment] = useState(false);
   const [isRescheduleMode, setIsRescheduleMode] = useState(false);
   const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
+
+  // Real-time booking alert banner (when appointment is booked anywhere: OP, Procedures, or Reception)
+  const [realtimeAlert, setRealtimeAlert] = useState<{
+    id: string;
+    code: string;
+    patientName: string;
+    patientCode?: string;
+    doctorName?: string;
+    date: string;
+    time: string;
+    visitType: string;
+    procedureName?: string;
+  } | null>(null);
 
   const [bookingData, setBookingData] = useState({
     doctorId: '',
@@ -193,10 +251,8 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
       setLoading(true);
       const params: any = {};
 
-      if (viewMode === 'today') {
-        params.date = todayStr;
-      } else if (viewMode === 'calendar') {
-        params.date = selectedDate;
+      if (viewMode === 'today' || viewMode === 'calendar') {
+        params.date = selectedDate || todayStr;
       }
       // 'upcoming' does not send date, filters client/backend
 
@@ -268,8 +324,62 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
     }
   };
 
+  // Fetch tomorrow's appointments reminder summary
+  const fetchTomorrowReminders = async () => {
+    try {
+      setLoadingTomorrowReminders(true);
+      const res = await api.get('/appointments/reminders/tomorrow');
+      if (res.data.success) {
+        setTomorrowReminders({
+          tomorrowDateKey: res.data.tomorrowDateKey,
+          tomorrowDisplayDate: res.data.tomorrowDisplayDate,
+          totalAppointments: res.data.totalAppointments,
+          pendingReminders: res.data.pendingReminders,
+          sentReminders: res.data.sentReminders,
+          appointments: res.data.appointments,
+        });
+      }
+    } catch (err) {
+      console.error('Failed to load tomorrow reminders:', err);
+    } finally {
+      setLoadingTomorrowReminders(false);
+    }
+  };
+
+  // Dispatch all pending reminders for tomorrow
+  const handleDispatchAllTomorrowReminders = async () => {
+    try {
+      setDispatchingTomorrowReminders(true);
+      const res = await api.post('/appointments/reminders/send-tomorrow');
+      if (res.data.success) {
+        alert(`Success: ${res.data.dispatchedCount} 1-day prior reminder(s) dispatched for tomorrow.`);
+        fetchTomorrowReminders();
+        fetchAppointments();
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Error sending tomorrow reminders');
+    } finally {
+      setDispatchingTomorrowReminders(false);
+    }
+  };
+
+  // Dispatch reminder for a single appointment (backend sync + WhatsApp trigger)
+  const handleSendSingleReminder = async (apt: Appointment) => {
+    try {
+      const res = await api.post(`/appointments/${apt.id}/send-reminder`);
+      if (res.data.success) {
+        sendAppointmentReminderWhatsApp(apt);
+        fetchTomorrowReminders();
+        fetchAppointments();
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Error sending appointment reminder');
+    }
+  };
+
   useEffect(() => {
     fetchDoctors();
+    fetchTomorrowReminders();
   }, []);
 
   useEffect(() => {
@@ -286,6 +396,19 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
     }
   }, [showBookingModal, bookingData.doctorId, bookingData.appointmentDate]);
 
+  // Auto-adjust time slot to first future unbooked slot when date changes or opens
+  useEffect(() => {
+    if (showBookingModal) {
+      const visible = CLINIC_TIME_SLOTS.filter((s) => !isSlotPast(s, bookingData.appointmentDate));
+      if (!bookingData.timeSlot || isSlotPast(bookingData.timeSlot, bookingData.appointmentDate)) {
+        const firstFree = visible.find((s) => !isSlotBooked(s)) || visible[0] || '';
+        if (firstFree && firstFree !== bookingData.timeSlot) {
+          setBookingData((prev) => ({ ...prev, timeSlot: firstFree }));
+        }
+      }
+    }
+  }, [bookingData.appointmentDate, showBookingModal, busySlots]);
+
   // Real-time socket event listener
   useEffect(() => {
     const socket = getSocket();
@@ -297,14 +420,50 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
       }
     };
 
-    socket.on('appointment:created', handleRefresh);
+    const handleCreated = (newApt: any) => {
+      fetchAppointments();
+      fetchCalendarSummary();
+      if (showBookingModal && bookingData.doctorId && bookingData.appointmentDate) {
+        fetchBusySlots(bookingData.doctorId, bookingData.appointmentDate);
+      }
+      if (newApt && newApt.appointmentCode) {
+        const aptDateStr = newApt.appointmentDate
+          ? new Date(newApt.appointmentDate).toISOString().substring(0, 10)
+          : todayStr;
+        const aptTimeStr = newApt.startTime
+          ? new Date(newApt.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '';
+        setRealtimeAlert({
+          id: newApt.id || String(Date.now()),
+          code: newApt.appointmentCode,
+          patientName: newApt.patient?.name || 'Patient',
+          patientCode: newApt.patient?.patientCode || '',
+          doctorName: newApt.doctor?.user?.fullName || '',
+          date: aptDateStr,
+          time: aptTimeStr,
+          visitType: newApt.visitType || 'NEW_VISIT',
+          procedureName: newApt.procedureName || '',
+        });
+      }
+    };
+
+    socket.on('appointment:created', handleCreated);
     socket.on('appointment:updated', handleRefresh);
     socket.on('appointment:rescheduled', handleRefresh);
+    socket.on('billing:consultation-created', handleRefresh);
+    socket.on('billing:payment-received', handleRefresh);
+    socket.on('appointment:reminder_sent', () => {
+      fetchAppointments();
+      fetchTomorrowReminders();
+    });
 
     return () => {
-      socket.off('appointment:created', handleRefresh);
+      socket.off('appointment:created', handleCreated);
       socket.off('appointment:updated', handleRefresh);
       socket.off('appointment:rescheduled', handleRefresh);
+      socket.off('billing:consultation-created', handleRefresh);
+      socket.off('billing:payment-received', handleRefresh);
+      socket.off('appointment:reminder_sent');
     };
   }, [viewMode, selectedDate, doctorFilter, specializationFilter, showBookingModal, bookingData]);
 
@@ -443,6 +602,10 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
 
       const res = await api.post('/appointments', payload);
       if (res.data.success) {
+        setSelectedDate(bookingData.appointmentDate);
+        fetchAppointments();
+        fetchCalendarSummary();
+        fetchTomorrowReminders();
         setBookingSuccess(`Appointment ${res.data.appointment.appointmentCode} confirmed!`);
         setTimeout(() => {
           setShowBookingModal(false);
@@ -451,8 +614,6 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
           setRescheduleAppointmentId(null);
           setActivePatientAppointment(null);
           setBookingSuccess('');
-          fetchAppointments();
-          fetchCalendarSummary();
         }, 1200);
       }
     } catch (err: any) {
@@ -478,23 +639,50 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
     }
   };
 
-  // Send WhatsApp Reminder
-  const handleSendWhatsAppReminder = (apt: Appointment) => {
-    const timeFormatted = `${new Date(apt.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${new Date(apt.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-    const msg = `*HospAI Dental & Orthopedic Clinic*
-*Appointment Confirmation*
-----------------------------------------
-Appointment Code: ${apt.appointmentCode}
-Patient: ${apt.patient.name} (${apt.patient.patientCode})
-Doctor: Dr. ${apt.doctor.user.fullName} (${apt.specialization})
-Date: ${new Date(apt.appointmentDate).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
-Time: ${timeFormatted}
-Visit Type: ${apt.visitType}
-${apt.procedureName ? `Procedure: ${apt.procedureName}\n` : ''}----------------------------------------
-Please arrive 10 minutes prior to your scheduled consultation.
-For inquiries or rescheduling, reply directly to this message.`;
+  // Send 100% Free WhatsApp Reminder Directly to Patient
+  const handleSendWhatsAppReminder = async (apt: Appointment) => {
+    const tomorrowStr = tomorrowReminders?.tomorrowDateKey || '';
+    const aptDateStr = typeof apt.appointmentDate === 'string'
+      ? apt.appointmentDate.substring(0, 10)
+      : new Date(apt.appointmentDate).toISOString().substring(0, 10);
+    const isTomorrow = aptDateStr === tomorrowStr;
 
-    sendWhatsAppMessage(apt.patient.mobile, msg);
+    const timeFormatted = `${new Date(apt.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${new Date(apt.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    const dateFormatted = new Date(apt.appointmentDate).toLocaleDateString(undefined, {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+
+    const msg = `*HospAI Dental & Orthopedic Clinic*
+*${isTomorrow ? 'Patient Appointment Reminder: Scheduled for Tomorrow' : 'Appointment Confirmation'}*
+----------------------------------------
+Dear ${apt.patient?.name || 'Valued Patient'},
+
+${isTomorrow 
+  ? `This is a reminder for your scheduled dental consultation tomorrow (${dateFormatted}).` 
+  : `Your appointment has been confirmed for ${dateFormatted}.`}
+
+• Doctor: Dr. ${apt.doctor?.user?.fullName || 'Clinic Specialist'} (${apt.specialization})
+• Date: ${dateFormatted}
+• Time Slot: ${timeFormatted}
+• Appointment Code: ${apt.appointmentCode}
+${apt.procedureName ? `• Procedure / Reason: ${apt.procedureName}\n` : ''}----------------------------------------
+Please arrive 10 minutes prior to your time slot for registration.
+For inquiries, directions, or rescheduling, reply directly to this message or call +91 98765 43210.
+We look forward to seeing you!`;
+
+    sendWhatsAppMessage(apt.patient?.mobile || '', msg);
+
+    // Sync status to database so the badge turns green immediately
+    try {
+      await api.post(`/appointments/${apt.id}/send-reminder`);
+      fetchAppointments();
+      fetchTomorrowReminders();
+    } catch (e) {
+      // background sync
+    }
   };
 
   // Calendar Grid Generation (Local-date deterministic, zero UTC midnight offset bugs)
@@ -571,9 +759,9 @@ For inquiries or rescheduling, reply directly to this message.`;
     return { total, dental, ortho, completed };
   }, [calendarSummary]);
 
-  // Today's metrics (active queue vs completed)
+  // Today's / Selected Date's metrics (active queue vs completed)
   const todayCounts = useMemo(() => {
-    const list = viewMode === 'today' ? appointments : [];
+    const list = appointments;
     const scheduled = list.filter((a) => a.status === 'SCHEDULED').length;
     const inProgress = list.filter((a) => a.status === 'IN_PROGRESS').length;
     const completed = list.filter((a) => a.status === 'COMPLETED').length;
@@ -584,12 +772,12 @@ For inquiries or rescheduling, reply directly to this message.`;
       completed,
       activeWaiting: scheduled + inProgress,
     };
-  }, [appointments, viewMode]);
+  }, [appointments]);
 
   // Filtered Appointments list with search & queue filter
   const filteredAppointments = useMemo(() => {
     let list = appointments;
-    if (viewMode === 'today') {
+    if (viewMode === 'today' || viewMode === 'calendar') {
       if (queueFilter === 'waiting') {
         list = list.filter((a) => a.status === 'SCHEDULED' || a.status === 'IN_PROGRESS');
       } else if (queueFilter === 'completed') {
@@ -643,7 +831,7 @@ For inquiries or rescheduling, reply directly to this message.`;
               }`}
             >
               <Clock className="w-3.5 h-3.5" />
-              <span>Today's Queue</span>
+              <span>{selectedDate === todayStr ? "Today's Queue" : `Queue (${formatDisplayDate(selectedDate)})`}</span>
               {viewMode === 'today' && (
                 <span
                   className={`ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
@@ -662,6 +850,16 @@ For inquiries or rescheduling, reply directly to this message.`;
                 </span>
               )}
             </button>
+
+            {selectedDate !== todayStr && (
+              <button
+                onClick={() => setSelectedDate(todayStr)}
+                className="px-2.5 py-1 text-[11px] font-bold text-sky-700 bg-sky-100 hover:bg-sky-200 rounded-lg transition cursor-pointer flex items-center gap-1"
+                title="Reset view back to today"
+              >
+                <span>Jump to Today</span>
+              </button>
+            )}
 
             <button
               onClick={() => setViewMode('calendar')}
@@ -712,6 +910,141 @@ For inquiries or rescheduling, reply directly to this message.`;
           </button>
         </div>
       </div>
+
+      {/* REAL-TIME APPOINTMENT CREATED ALERT (e.g. from OP or Procedures) */}
+      {realtimeAlert && (
+        <div className="p-4 bg-gradient-to-r from-emerald-50 via-teal-50 to-sky-50 border-2 border-emerald-400 rounded-2xl shadow-sm flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-md shrink-0">
+              <BellRing className="w-5 h-5 animate-bounce" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-2 py-0.5 bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider rounded-md">
+                  New Appointment Booked
+                </span>
+                <span className="font-mono text-xs font-bold text-slate-800">
+                  {realtimeAlert.code}
+                </span>
+                {realtimeAlert.visitType === 'PROCEDURE' && (
+                  <span className="px-2 py-0.5 bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-black uppercase tracking-wider rounded-md">
+                    Procedure Slot
+                  </span>
+                )}
+              </div>
+              <p className="text-xs font-semibold text-slate-800 mt-1">
+                Patient <strong className="text-emerald-950 font-bold">{realtimeAlert.patientName}</strong> {realtimeAlert.patientCode ? `(${realtimeAlert.patientCode})` : ''} scheduled for{' '}
+                <strong className="text-sky-900 font-bold">{realtimeAlert.date} at {realtimeAlert.time}</strong> with Dr. {realtimeAlert.doctorName || 'Doctor'}.
+                {realtimeAlert.procedureName && <span className="text-slate-600 font-medium"> • Procedure: {realtimeAlert.procedureName}</span>}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedDate(realtimeAlert.date);
+                setViewMode('calendar');
+                setRealtimeAlert(null);
+              }}
+              className="px-3.5 py-1.5 bg-[#0090e7] hover:bg-[#0077b6] text-white rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer shadow-xs flex items-center gap-1.5"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>View Date ({realtimeAlert.date})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setRealtimeAlert(null)}
+              className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-200/50 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 1-DAY PRIOR PATIENT WHATSAPP REMINDERS BANNER (ONLY SHOWN WHEN AT LEAST 1 PATIENT NEEDS TO BE REMINDED) */}
+      {pendingTomorrowList.length > 0 && (
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-4 text-white shadow-md border border-indigo-500/30 relative overflow-hidden">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 relative z-10">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-600 text-white flex items-center justify-center font-bold shadow-md shadow-emerald-500/30 shrink-0">
+                <MessageSquare className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm font-black tracking-tight text-white flex items-center gap-2">
+                    <span>1-Day Prior Patient WhatsApp Reminders</span>
+                  </h3>
+                  <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/30 animate-pulse">
+                    {pendingTomorrowList.length} Need Reminder
+                  </span>
+                </div>
+                <p className="text-xs text-sky-200/80 mt-0.5">
+                  Showing only patients scheduled for tomorrow who still need a reminder ({pendingTomorrowList.length} pending). Once sent, they are automatically removed.
+                  <br />
+                  Tomorrow ({tomorrowReminders?.tomorrowDisplayDate || 'Upcoming'}):{' '}
+                  <strong className="text-white font-bold">{tomorrowReminders?.totalAppointments || 0} Total Patients</strong> •{' '}
+                  <span className="text-emerald-300 font-bold">{tomorrowReminders?.sentReminders || 0} Already Notified</span> •{' '}
+                  <span className="text-amber-300 font-bold">{pendingTomorrowList.length} Need to Send</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 w-full md:w-auto justify-end flex-wrap">
+              <button
+                onClick={() => setShowTomorrowDrawer(!showTomorrowDrawer)}
+                className="px-3.5 py-1.5 text-xs font-bold rounded-xl transition shadow-sm flex items-center gap-1.5 cursor-pointer bg-[#25D366] hover:bg-[#20ba59] text-white shadow-emerald-500/20"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>
+                  {showTomorrowDrawer ? 'Hide List' : `Send Needed Reminders (${pendingTomorrowList.length})`}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Expandable Tomorrow Appointments Quick Drawer - ONLY SHOWS NEEDED REMINDERS */}
+          {showTomorrowDrawer && (
+            <div className="mt-4 pt-4 border-t border-white/10">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-sky-200 mb-2.5">
+                Patients Needing 1-Day Prior Reminder ({tomorrowReminders?.tomorrowDisplayDate})
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {pendingTomorrowList.map((apt: any) => (
+                  <div
+                    key={apt.id}
+                    className="p-2.5 rounded-xl bg-white/10 border border-white/10 hover:border-emerald-400/50 transition flex items-center justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-xs text-white truncate">{apt.patient?.name}</span>
+                        <span className="text-[10px] font-mono text-sky-300">({apt.patient?.mobile})</span>
+                      </div>
+                      <div className="text-[11px] text-sky-200/80 mt-0.5 flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-sky-400 shrink-0" />
+                        <span>
+                          {new Date(apt.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • Dr. {apt.doctor?.user?.fullName}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        onClick={() => handleSendWhatsAppReminder(apt)}
+                        className="px-2.5 py-1 bg-[#25D366] hover:bg-[#20ba59] text-white rounded-lg text-[10px] font-bold transition shadow-2xs cursor-pointer flex items-center gap-1"
+                        title={`Open WhatsApp reminder for patient ${apt.patient?.name} (${apt.patient?.mobile})`}
+                      >
+                        <MessageSquare className="w-3 h-3" />
+                        <span>Send WhatsApp</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 2. TODAY'S QUICK METRICS (Clickable Filter Tiles) */}
       {viewMode === 'today' && (
@@ -901,12 +1234,19 @@ For inquiries or rescheduling, reply directly to this message.`;
             {calendarDays.map((cell, idx) => {
               const hasAppointments = cell.summary && cell.summary.total > 0;
               const isCellSelected = cell.dateStr === selectedDate;
+              const bookedCount = cell.summary?.total || 0;
+              const availableCount = Math.max(0, 18 - bookedCount);
+              const isFullyBooked = bookedCount >= 18;
 
               return (
                 <div
                   key={idx}
                   onClick={() => setSelectedDate(cell.dateStr)}
-                  className={`min-h-[125px] p-3 rounded-2xl border flex flex-col justify-between transition-all duration-200 cursor-pointer relative group ${
+                  onDoubleClick={() => {
+                    setSelectedDate(cell.dateStr);
+                    setViewMode('today');
+                  }}
+                  className={`min-h-[135px] p-3 rounded-2xl border flex flex-col justify-between transition-all duration-200 cursor-pointer relative group ${
                     !cell.isCurrentMonth
                       ? 'opacity-30 bg-slate-50/40 border-slate-100 hover:opacity-60'
                       : 'bg-white border-slate-200/90 hover:border-[#0090e7] hover:shadow-md hover:-translate-y-0.5'
@@ -933,11 +1273,18 @@ For inquiries or rescheduling, reply directly to this message.`;
                     >
                       {cell.dayNum}
                     </span>
-                    {cell.isToday && (
-                      <span className="text-[9px] font-black tracking-wider text-white bg-gradient-to-r from-sky-500 to-blue-600 px-2 py-0.5 rounded-md shadow-2xs">
-                        TODAY
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {cell.isToday && (
+                        <span className="text-[9px] font-black tracking-wider text-white bg-gradient-to-r from-sky-500 to-blue-600 px-2 py-0.5 rounded-md shadow-2xs">
+                          TODAY
+                        </span>
+                      )}
+                      {isFullyBooked && (
+                        <span className="text-[9px] font-black uppercase text-white bg-rose-600 px-1.5 py-0.5 rounded-md shadow-2xs">
+                          FULL
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Appointment Load Indicator */}
@@ -946,11 +1293,11 @@ For inquiries or rescheduling, reply directly to this message.`;
                       <div className="space-y-1">
                         <div className="text-[11px] font-black p-2 rounded-xl bg-gradient-to-r from-sky-50 to-indigo-50/70 text-sky-950 border border-sky-200/90 flex items-center justify-between shadow-2xs">
                           <span>{cell.summary.total} {cell.summary.total === 1 ? 'visit' : 'visits'}</span>
-                          {cell.summary.completed > 0 && (
-                            <span className="text-[9px] font-black text-white bg-emerald-600 px-1.5 py-0.2 rounded-md shadow-2xs">
-                              ✓{cell.summary.completed}
-                            </span>
-                          )}
+                          <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-md ${
+                            isFullyBooked ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                          }`}>
+                            {isFullyBooked ? '0 Left' : `${availableCount} open`}
+                          </span>
                         </div>
                         <div className="flex items-center gap-1 text-[9px] font-bold">
                           {cell.summary.dental > 0 && (
@@ -963,41 +1310,90 @@ For inquiries or rescheduling, reply directly to this message.`;
                               {cell.summary.ortho} Ortho
                             </span>
                           )}
+                          {cell.summary.completed > 0 && (
+                            <span className="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white font-black shadow-2xs">
+                              ✓{cell.summary.completed}
+                            </span>
+                          )}
                         </div>
                       </div>
                     ) : (
-                      <div className="text-xs text-slate-300 font-medium group-hover:text-slate-400 transition">
-                        No bookings
+                      <div className="text-xs text-slate-400 font-medium group-hover:text-slate-600 transition flex items-center justify-between">
+                        <span>No bookings</span>
+                        <span className="text-[10px] text-emerald-600 font-bold">18 open</span>
                       </div>
                     )}
                   </div>
 
-                  {/* 1-click Book Button on Hover */}
+                  {/* Action Buttons on Hover */}
                   <div className="text-right pt-1 flex justify-end">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedDate(cell.dateStr);
-                        setSelectedPatient(null);
-                        setBookingData({
-                          doctorId: doctors[0]?.id || '',
-                          specialization: doctors[0]?.specialization || 'DENTAL',
-                          appointmentDate: cell.dateStr,
-                          timeSlot: '10:00',
-                          durationMinutes: 30,
-                          visitType: 'NEW_VISIT',
-                          procedureName: '',
-                          reasonForVisit: '',
-                        });
-                        setBookingError('');
-                        setShowBookingModal(true);
-                      }}
-                      className="opacity-0 group-hover:opacity-100 transition-all duration-200 px-2.5 py-1 bg-gradient-to-r from-[#0090e7] to-blue-600 hover:from-[#0070c9] hover:to-blue-700 text-white text-[10px] font-black rounded-lg shadow-sm flex items-center gap-1 cursor-pointer"
-                      title="Schedule appointment on this date"
-                    >
-                      <Plus className="w-3 h-3 stroke-[3]" />
-                      <span>Book Slot</span>
-                    </button>
+                    {hasAppointments ? (
+                      <div className="opacity-0 group-hover:opacity-100 transition-all duration-200 flex items-center gap-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedDate(cell.dateStr);
+                            setViewMode('today');
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 text-[10px] font-bold rounded-lg border border-slate-200 shadow-2xs flex items-center gap-1 cursor-pointer"
+                          title="Open full visit queue for this date"
+                        >
+                          <Eye className="w-3 h-3 text-slate-600" />
+                          <span>View ({bookedCount})</span>
+                        </button>
+                        {!isFullyBooked && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedDate(cell.dateStr);
+                              setSelectedPatient(null);
+                              setBookingData({
+                                doctorId: doctors[0]?.id || '',
+                                specialization: doctors[0]?.specialization || 'DENTAL',
+                                appointmentDate: cell.dateStr,
+                                timeSlot: '10:00',
+                                durationMinutes: 30,
+                                visitType: 'NEW_VISIT',
+                                procedureName: '',
+                                reasonForVisit: '',
+                              });
+                              setBookingError('');
+                              setShowBookingModal(true);
+                            }}
+                            className="px-2 py-1 bg-[#0090e7] hover:bg-[#0070c9] text-white text-[10px] font-bold rounded-lg shadow-2xs flex items-center gap-1 cursor-pointer"
+                            title={`Book an appointment on this date (${availableCount} slots available)`}
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>+ Slot</span>
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedDate(cell.dateStr);
+                          setSelectedPatient(null);
+                          setBookingData({
+                            doctorId: doctors[0]?.id || '',
+                            specialization: doctors[0]?.specialization || 'DENTAL',
+                            appointmentDate: cell.dateStr,
+                            timeSlot: '10:00',
+                            durationMinutes: 30,
+                            visitType: 'NEW_VISIT',
+                            procedureName: '',
+                            reasonForVisit: '',
+                          });
+                          setBookingError('');
+                          setShowBookingModal(true);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 transition-all duration-200 px-2.5 py-1 bg-gradient-to-r from-[#0090e7] to-blue-600 hover:from-[#0070c9] hover:to-blue-700 text-white text-[10px] font-black rounded-lg shadow-sm flex items-center gap-1 cursor-pointer"
+                        title="Book an appointment slot on this date"
+                      >
+                        <Plus className="w-3 h-3 stroke-[3]" />
+                        <span>Book Slot</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -1087,9 +1483,9 @@ For inquiries or rescheduling, reply directly to this message.`;
             <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
               <span>
                 {viewMode === 'today'
-                  ? `Today's Appointments (${filteredAppointments.length})`
+                  ? (selectedDate === todayStr ? `Today's Appointments (${filteredAppointments.length})` : `Appointments for ${formatDisplayDate(selectedDate)} (${filteredAppointments.length})`)
                   : viewMode === 'calendar'
-                  ? `Appointments for ${new Date(selectedDate).toDateString()} (${filteredAppointments.length})`
+                  ? `Appointments for ${formatDisplayDate(selectedDate)} (${filteredAppointments.length} Booked • ${Math.max(0, 18 - filteredAppointments.length)} Open Slots)`
                   : `All Upcoming Scheduled Visits (${filteredAppointments.length})`}
               </span>
             </h3>
@@ -1304,7 +1700,7 @@ For inquiries or rescheduling, reply directly to this message.`;
                       {/* Doctor info */}
                       <div className="hidden lg:flex items-center gap-1.5 text-xs font-bold text-slate-800 pl-2 border-l border-slate-200">
                         <Stethoscope className="w-3.5 h-3.5 text-[#0090e7]" />
-                        <span>Dr. {apt.doctor?.user?.fullName}</span>
+                        <span>{formatDoctorName(apt.doctor?.user?.fullName)}</span>
                         <span
                           className={`text-[10px] font-black px-1.5 py-0.2 rounded uppercase ${
                             apt.specialization === 'DENTAL'
@@ -1316,19 +1712,35 @@ For inquiries or rescheduling, reply directly to this message.`;
                         </span>
                       </div>
 
-                      {/* Symptoms */}
-                      {apt.procedureName && (
-                        <div className="hidden xl:flex items-center gap-1 pl-2 border-l border-slate-200">
-                          {apt.procedureName.split(',').slice(0, 2).map((symptom, idx) => (
-                            <span
-                              key={idx}
-                              className="text-[10px] font-bold text-sky-900 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-md"
-                            >
-                              {symptom.trim()}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                      {/* Visit Type Badge & Procedure / Symptoms */}
+                      <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
+                        {apt.visitType === 'PROCEDURE' ? (
+                          <span className="text-[10px] font-black text-purple-900 bg-purple-100 border border-purple-300 px-2 py-0.5 rounded-md uppercase tracking-wider">
+                            Procedure Slot
+                          </span>
+                        ) : apt.visitType === 'FOLLOW_UP' ? (
+                          <span className="text-[10px] font-black text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-md uppercase tracking-wider">
+                            Follow-Up
+                          </span>
+                        ) : null}
+
+                        {apt.procedureName && (
+                          <div className="hidden xl:flex items-center gap-1">
+                            {apt.procedureName.split(',').slice(0, 2).map((symptom, idx) => (
+                              <span
+                                key={idx}
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                                  apt.visitType === 'PROCEDURE'
+                                    ? 'text-purple-950 bg-purple-50 border border-purple-200'
+                                    : 'text-sky-900 bg-sky-50 border border-sky-200'
+                                }`}
+                              >
+                                {symptom.trim()}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {/* Right block: Billing Done badge + Status Badge */}
@@ -1393,14 +1805,24 @@ For inquiries or rescheduling, reply directly to this message.`;
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
                     {/* Left: WhatsApp + Billing invoice snippet if available */}
                     <div className="flex items-center gap-2 flex-wrap">
-                      <button
-                        onClick={() => handleSendWhatsAppReminder(apt)}
-                        title="Send WhatsApp confirmation / reminder to patient"
-                        className="px-2.5 py-1 bg-[#25D366] hover:bg-[#20ba59] text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
-                      >
-                        <MessageSquare className="w-3.5 h-3.5" />
-                        <span>WhatsApp</span>
-                      </button>
+                      {/* Reminders are strictly for upcoming visits (SCHEDULED or CONFIRMED), NEVER for in-chair, completed, or cancelled visits */}
+                      {(apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED') && (
+                        apt.reminderSent ? (
+                          <span className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-black flex items-center gap-1 shadow-2xs">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Reminder Sent</span>
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleSendWhatsAppReminder(apt)}
+                            title={`Send 1-day prior WhatsApp reminder to patient ${apt.patient?.name} (${apt.patient?.mobile})`}
+                            className="px-2.5 py-1 bg-[#25D366] hover:bg-[#20ba59] text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5" />
+                            <span>Send WhatsApp Reminder</span>
+                          </button>
+                        )
+                      )}
 
                       {apt.consultationBill && (
                         <span className="text-[11px] font-mono text-slate-500 font-medium">
@@ -1530,51 +1952,73 @@ For inquiries or rescheduling, reply directly to this message.`;
                         </>
                       )}
 
-                      {/* COMPLETED */}
+                      {/* COMPLETED: After Consultation */}
                       {apt.status === 'COMPLETED' && (
                         <>
-                          {onNavigateToBilling && (
+                          {/* If not billed yet, show Bill / Collect. Once paid, HIDE THIS BUTTON! */}
+                          {onNavigateToBilling && !isBillPaid && (
                             <button
                               onClick={() => onNavigateToBilling(apt)}
-                              title={isBillPaid ? "View or Print Paid Consultation Bill" : "Collect Bill Payment"}
-                              className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs ${
-                                isBillPaid
-                                  ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                  : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
-                              }`}
+                              title="Collect Consultation Fee"
+                              className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
                             >
-                              {isBillPaid ? (
-                                <>
-                                  <Receipt className="w-3.5 h-3.5 text-emerald-600" />
-                                  <span>View Bill / Receipt</span>
-                                </>
-                              ) : (
-                                <>
-                                  <CreditCard className="w-3.5 h-3.5 text-white" />
-                                  <span>Bill / Collect</span>
-                                </>
-                              )}
+                              <CreditCard className="w-3.5 h-3.5 text-white" />
+                              <span>Bill / Collect</span>
                             </button>
                           )}
 
+                          {/* When Billed & Paid: Never show "Bill / Collect" anymore! Show verified indicator */}
+                          {isBillPaid && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-black shadow-2xs">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>✓ Billed</span>
+                            </span>
+                          )}
+
+                          {/* Post-Consultation Step 1: Doctor wrote medicines -> Sell / Dispense Meds */}
+                          {onNavigateToPharmacy && (
+                            <button
+                              onClick={() => onNavigateToPharmacy(apt.patientId)}
+                              title="Patient has prescription? Dispense / Sell Medicines"
+                              className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                            >
+                              <Pill className="w-3 h-3 text-amber-600" />
+                              <span>Meds / Pharmacy</span>
+                            </button>
+                          )}
+
+                          {/* Post-Consultation Step 2: Doctor wrote findings/problem -> Save in Clinical Notes & 3D Chart */}
                           {onNavigateToNotes && (
                             <button
                               onClick={() => onNavigateToNotes(apt.patientId)}
-                              title="View Doctor Clinical Notes"
-                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                              title="Doctor wrote diagnosis/findings? Enter in Clinical Notes & 3D Chart"
+                              className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
                             >
                               <FileText className="w-3 h-3 text-indigo-600" />
-                              <span>Notes</span>
+                              <span>Clinical Notes</span>
                             </button>
                           )}
 
+                          {/* Post-Consultation Step 3: Procedure needed today or planned -> Enter Procedure details */}
+                          {onNavigateToProcedures && (
+                            <button
+                              onClick={() => onNavigateToProcedures(apt.patientId)}
+                              title="Procedure needed today or planned? Record Procedure Details"
+                              className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                            >
+                              <Scissors className="w-3 h-3 text-rose-600" />
+                              <span>Procedure</span>
+                            </button>
+                          )}
+
+                          {/* Post-Consultation Step 4: Doctor asks to come another date -> Book Follow-Up */}
                           <button
                             onClick={() => handleOpenFollowUpBooking(apt, 7)}
                             title="Schedule patient's follow-up visit"
                             className="px-2.5 py-1 bg-sky-50 hover:bg-sky-100 text-[#0090e7] border border-sky-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
                           >
                             <Plus className="w-3 h-3" />
-                            <span>Follow-Up</span>
+                            <span>+ Follow-Up</span>
                           </button>
                         </>
                       )}
@@ -1599,51 +2043,70 @@ For inquiries or rescheduling, reply directly to this message.`;
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredAppointments.map((apt) => (
-                  <tr key={apt.id} className="hover:bg-slate-50/70 transition">
-                    {/* Time Slot & Code */}
-                    <td className="p-3.5 pl-5 font-bold text-slate-900 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5 text-slate-800">
-                        <Clock className="w-3.5 h-3.5 text-[#0090e7]" />
-                        <span>
-                          {new Date(apt.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} -{' '}
-                          {new Date(apt.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      <div className="text-[10px] font-mono text-slate-500 mt-0.5">{apt.appointmentCode}</div>
-                      {viewMode === 'upcoming' && (
-                        <div className="text-[10px] text-teal-700 font-bold mt-0.5">
-                          {new Date(apt.appointmentDate).toDateString()}
+                {filteredAppointments.map((apt) => {
+                  const isBilled = !!apt.consultationBill;
+                  const isBillPaid = isBilled && (apt.consultationBill?.paymentStatus === 'PAID' || (apt.consultationBill?.pendingBalance || 0) <= 0);
+
+                  return (
+                    <tr key={apt.id} className="hover:bg-slate-50/70 transition">
+                      {/* Time Slot & Code */}
+                      <td className="p-3.5 pl-5 font-bold text-slate-900 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5 text-slate-800">
+                          <Clock className="w-3.5 h-3.5 text-[#0090e7]" />
+                          <span>
+                            {new Date(apt.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} -{' '}
+                            {new Date(apt.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
                         </div>
-                      )}
-                    </td>
+                        <div className="text-[10px] font-mono text-slate-500 mt-0.5">{apt.appointmentCode}</div>
+                        {viewMode === 'upcoming' && (
+                          <div className="text-[10px] text-teal-700 font-bold mt-0.5">
+                            {new Date(apt.appointmentDate).toDateString()}
+                          </div>
+                        )}
+                      </td>
 
-                    {/* Patient */}
-                    <td className="p-3.5">
-                      <div className="font-bold text-slate-900 flex items-center gap-2">
-                        <span>{apt.patient?.name}</span>
-                        <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-slate-100 text-slate-700 font-mono border border-slate-200">
-                          {apt.patient?.patientCode}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-500 font-medium mt-0.5">
-                        {apt.patient?.mobile} • {apt.patient?.gender}, {apt.patient?.age} yrs
-                      </div>
-                    </td>
+                      {/* Patient */}
+                      <td className="p-3.5">
+                        <div className="font-bold text-slate-900 flex items-center gap-2">
+                          <span>{apt.patient?.name}</span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-slate-100 text-slate-700 font-mono border border-slate-200">
+                            {apt.patient?.patientCode}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-medium mt-0.5">
+                          {apt.patient?.mobile} • {apt.patient?.gender}, {apt.patient?.age} yrs
+                        </div>
+                      </td>
 
-                    {/* Doctor */}
-                    <td className="p-3.5">
-                      <div className="font-bold text-slate-800">Dr. {apt.doctor?.user?.fullName}</div>
-                      <div className="text-[10px] text-[#0090e7] font-bold uppercase tracking-wider">
-                        {apt.specialization}
-                      </div>
-                    </td>
+                      {/* Doctor */}
+                      <td className="p-3.5">
+                        <div className="font-bold text-slate-800">{formatDoctorName(apt.doctor?.user?.fullName)}</div>
+                        <div className="text-[10px] text-[#0090e7] font-bold uppercase tracking-wider">
+                          {apt.specialization}
+                        </div>
+                      </td>
 
                     {/* Symptoms / Visit Reason */}
                     <td className="p-3.5">
-                      <span className="font-bold text-slate-800 text-[11px] block">{apt.visitType}</span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`font-bold text-[11px] block ${
+                          apt.visitType === 'PROCEDURE' ? 'text-purple-700' : apt.visitType === 'FOLLOW_UP' ? 'text-amber-700' : 'text-slate-800'
+                        }`}>
+                          {apt.visitType}
+                        </span>
+                        {apt.visitType === 'PROCEDURE' && (
+                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
+                            Procedure Slot
+                          </span>
+                        )}
+                      </div>
                       {apt.procedureName && (
-                        <div className="text-[11px] text-sky-800 font-medium bg-sky-50 px-2 py-0.5 rounded border border-sky-100 inline-block mt-0.5">
+                        <div className={`text-[11px] font-medium px-2 py-0.5 rounded border inline-block mt-0.5 ${
+                          apt.visitType === 'PROCEDURE'
+                            ? 'text-purple-900 bg-purple-50 border-purple-200'
+                            : 'text-sky-800 bg-sky-50 border-sky-100'
+                        }`}>
                           {apt.procedureName}
                         </div>
                       )}
@@ -1672,13 +2135,27 @@ For inquiries or rescheduling, reply directly to this message.`;
                     {/* Clinical Actions */}
                     <td className="p-3.5 pr-5 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          onClick={() => handleSendWhatsAppReminder(apt)}
-                          title="Send WhatsApp confirmation / reminder to patient"
-                          className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer"
-                        >
-                          <MessageSquare className="w-3.5 h-3.5" />
-                        </button>
+                        {/* Only show appointment reminder actions for upcoming SCHEDULED or CONFIRMED visits */}
+                        {(apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED') && (
+                          <button
+                            onClick={() => handleSendWhatsAppReminder(apt)}
+                            title="Send WhatsApp confirmation / reminder to patient"
+                            className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
+                        {(apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED') && (
+                          apt.reminderSent && (
+                            <span
+                              title={`1-Day prior appointment reminder has already been sent to patient ${apt.patient?.name} (${apt.patient?.mobile})`}
+                              className="p-1.5 bg-emerald-50 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-bold flex items-center shadow-2xs"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            </span>
+                          )
+                        )}
 
                         {apt.status === 'SCHEDULED' && (
                           <>
@@ -1787,14 +2264,32 @@ For inquiries or rescheduling, reply directly to this message.`;
 
                         {apt.status === 'COMPLETED' && (
                           <>
-                            {onNavigateToBilling && (
+                            {onNavigateToBilling && !isBillPaid && (
                               <button
                                 onClick={() => onNavigateToBilling(apt)}
-                                title="View or Collect Consultation Bill"
-                                className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                                title="Collect Consultation Fee"
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-xs"
                               >
-                                <CreditCard className="w-3.5 h-3.5 text-emerald-600" />
-                                <span>Bill / Ledger</span>
+                                <CreditCard className="w-3.5 h-3.5 text-white" />
+                                <span>Bill / Collect</span>
+                              </button>
+                            )}
+
+                            {isBillPaid && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-300 text-[11px] font-black">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                <span>✓ Billed</span>
+                              </span>
+                            )}
+
+                            {onNavigateToPharmacy && (
+                              <button
+                                onClick={() => onNavigateToPharmacy(apt.patientId)}
+                                title="Dispense / Sell Medicines"
+                                className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                              >
+                                <Pill className="w-3 h-3 text-amber-600" />
+                                <span>Meds</span>
                               </button>
                             )}
 
@@ -1802,27 +2297,39 @@ For inquiries or rescheduling, reply directly to this message.`;
                               <button
                                 onClick={() => onNavigateToNotes(apt.patientId)}
                                 title="View Doctor Clinical Notes"
-                                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                                className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
                               >
-                                <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                                <FileText className="w-3 h-3 text-indigo-600" />
                                 <span>Notes</span>
+                              </button>
+                            )}
+
+                            {onNavigateToProcedures && (
+                              <button
+                                onClick={() => onNavigateToProcedures(apt.patientId)}
+                                title="Record Performed Procedure"
+                                className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                              >
+                                <Scissors className="w-3 h-3 text-rose-600" />
+                                <span>Procedure</span>
                               </button>
                             )}
 
                             <button
                               onClick={() => handleOpenFollowUpBooking(apt, 7)}
                               title="Schedule patient's follow-up visit"
-                              className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-[#0090e7] border border-sky-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                              className="px-2 py-1 bg-sky-50 hover:bg-sky-100 text-[#0090e7] border border-sky-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
                             >
                               <Plus className="w-3 h-3" />
-                              <span>Follow-Up</span>
+                              <span>+ Follow-Up</span>
                             </button>
                           </>
                         )}
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1998,8 +2505,8 @@ For inquiries or rescheduling, reply directly to this message.`;
                     }}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-none text-xs font-semibold text-slate-800 focus:outline-none focus:border-[#0090e7]"
                   >
-                    <option value="DENTAL">Dental (Dr. Rajesh Sharma)</option>
-                    <option value="ORTHOPEDIC">Orthopedic (Dr. Ananya Roy)</option>
+                    <option value="DENTAL">Dental</option>
+                    <option value="ORTHOPEDIC">Orthopedic</option>
                   </select>
                 </div>
 
@@ -2098,57 +2605,70 @@ For inquiries or rescheduling, reply directly to this message.`;
                 />
               </div>
 
-              {/* REAL-TIME TIME-SLOT MATRIX (Zero Double-Booking) */}
-              <div className="border border-slate-200 p-3.5 bg-slate-50/70">
-                <div className="flex items-center justify-between mb-2.5">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-[#0090e7]" />
-                    <span>Select Time Slot</span>
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
-                      {CLINIC_TIME_SLOTS.filter((s) => !isSlotBooked(s)).length} Available
-                    </span>
-                    <span className="text-[10px] px-2 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 font-bold">
-                      {CLINIC_TIME_SLOTS.filter((s) => isSlotBooked(s)).length} Booked
-                    </span>
-                    {loadingBusySlots && <span className="text-[10px] text-slate-400 ml-1">Checking...</span>}
+              {/* REAL-TIME TIME-SLOT MATRIX (Zero Double-Booking & No Past Slots) */}
+              {(() => {
+                const visibleClinicSlots = CLINIC_TIME_SLOTS.filter(
+                  (s) => !isSlotPast(s, bookingData.appointmentDate)
+                );
+                return (
+                  <div className="border border-slate-200 p-3.5 bg-slate-50/70">
+                    <div className="flex items-center justify-between mb-2.5">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-[#0090e7]" />
+                        <span>Select Time Slot</span>
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                          {visibleClinicSlots.filter((s) => !isSlotBooked(s)).length} Available
+                        </span>
+                        <span className="text-[10px] px-2 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 font-bold">
+                          {visibleClinicSlots.filter((s) => isSlotBooked(s)).length} Booked
+                        </span>
+                        {loadingBusySlots && <span className="text-[10px] text-slate-400 ml-1">Checking...</span>}
+                      </div>
+                    </div>
+
+                    {visibleClinicSlots.length === 0 ? (
+                      <div className="p-3 text-center text-xs text-amber-800 bg-amber-50 border border-amber-200 font-semibold">
+                        All clinic time slots for today have already concluded. Please select tomorrow or an upcoming date above.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                        {visibleClinicSlots.map((slot) => {
+                          const booked = isSlotBooked(slot);
+                          const occupant = getSlotOccupant(slot);
+                          const isSelected = bookingData.timeSlot === slot;
+
+                          return (
+                            <button
+                              key={slot}
+                              type="button"
+                              disabled={booked}
+                              onClick={() => setBookingData({ ...bookingData, timeSlot: slot })}
+                              className={`py-2 px-1 text-center text-xs font-bold rounded-none transition border cursor-pointer relative ${
+                                booked
+                                  ? 'bg-rose-50 text-rose-500 border-rose-200 opacity-60 cursor-not-allowed'
+                                  : isSelected
+                                  ? 'bg-[#0090e7] text-white border-[#0090e7] shadow-xs'
+                                  : 'bg-white text-slate-800 border-slate-200 hover:border-[#0090e7] hover:bg-sky-50/40'
+                              }`}
+                              title={booked ? `Already booked with ${occupant?.patient?.name}` : 'Click to select slot'}
+                            >
+                              <div className="flex items-center justify-center gap-1">
+                                <span className={`w-1.5 h-1.5 rounded-full ${booked ? 'bg-rose-500' : isSelected ? 'bg-white' : 'bg-emerald-500'}`} />
+                                <span>{slot}</span>
+                              </div>
+                              <div className="text-[9px] font-normal uppercase mt-0.5">
+                                {booked ? 'Booked' : isSelected ? 'Selected' : 'Available'}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                </div>
-
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-                  {CLINIC_TIME_SLOTS.map((slot) => {
-                    const booked = isSlotBooked(slot);
-                    const occupant = getSlotOccupant(slot);
-                    const isSelected = bookingData.timeSlot === slot;
-
-                    return (
-                      <button
-                        key={slot}
-                        type="button"
-                        disabled={booked}
-                        onClick={() => setBookingData({ ...bookingData, timeSlot: slot })}
-                        className={`py-2 px-1 text-center text-xs font-bold rounded-none transition border cursor-pointer relative ${
-                          booked
-                            ? 'bg-rose-50 text-rose-500 border-rose-200 opacity-60 cursor-not-allowed'
-                            : isSelected
-                            ? 'bg-[#0090e7] text-white border-[#0090e7] shadow-xs'
-                            : 'bg-white text-slate-800 border-slate-200 hover:border-[#0090e7] hover:bg-sky-50/40'
-                        }`}
-                        title={booked ? `Already booked with ${occupant?.patient?.name}` : 'Click to select slot'}
-                      >
-                        <div className="flex items-center justify-center gap-1">
-                          <span className={`w-1.5 h-1.5 rounded-full ${booked ? 'bg-rose-500' : isSelected ? 'bg-white' : 'bg-emerald-500'}`} />
-                          <span>{slot}</span>
-                        </div>
-                        <div className="text-[9px] font-normal uppercase mt-0.5">
-                          {booked ? 'Booked' : isSelected ? 'Selected' : 'Available'}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+                );
+              })()}
 
               {/* Visit Type */}
               <div>
@@ -2164,6 +2684,7 @@ For inquiries or rescheduling, reply directly to this message.`;
                   <option value="FOLLOW_UP">Follow Up (Repeat / Check-up)</option>
                   <option value="EMERGENCY">Emergency (Acute Pain / Trauma)</option>
                   <option value="ROUTINE_CHECKUP">Routine Clinical Checkup</option>
+                  <option value="PROCEDURE">Procedure / Treatment Slot</option>
                 </select>
               </div>
 
@@ -2247,6 +2768,21 @@ For inquiries or rescheduling, reply directly to this message.`;
                       );
                     })}
                   </div>
+                </div>
+              </div>
+
+              {/* Automated Patient Reminder Information */}
+              <div className="bg-sky-50 border border-sky-200 p-3 rounded-xl flex items-center gap-2.5 text-xs text-sky-950">
+                <BellRing className="w-5 h-5 text-sky-600 shrink-0 animate-pulse" />
+                <div>
+                  <span className="font-extrabold text-sky-900 block text-[11px] uppercase tracking-wider">
+                    Automated Patient Reminder Active
+                  </span>
+                  <span className="text-slate-600 text-xs mt-0.5 block">
+                    The system will automatically send an appointment reminder message to patient{' '}
+                    <strong className="text-slate-900">{selectedPatient?.name || 'the patient'}</strong> at mobile{' '}
+                    <strong className="font-mono text-slate-900">{selectedPatient?.mobile || 'their phone'}</strong> 1 day before their scheduled visit time ({bookingData.timeSlot}).
+                  </span>
                 </div>
               </div>
 

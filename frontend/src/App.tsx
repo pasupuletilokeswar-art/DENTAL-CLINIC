@@ -5,14 +5,12 @@ import { Header } from './components/Header';
 import { DashboardOverview } from './modules/dashboard/DashboardOverview';
 import { PatientModule } from './modules/patients/PatientModule';
 import { AppointmentModule } from './modules/appointments/AppointmentModule';
-import { ClinicalNotesModule } from './modules/clinical-notes/ClinicalNotesModule';
 import { ConsultationBillingModule } from './modules/billing/ConsultationBillingModule';
 import { PharmacyModule } from './modules/pharmacy/PharmacyModule';
 import { OperationsModule } from './modules/operations/OperationsModule';
 import { DentalLabModule } from './modules/lab/DentalLabModule';
 import { ReportsModule } from './modules/reports/ReportsModule';
 import { AdminModule } from './modules/admin/AdminModule';
-import { DentalChartModule } from './modules/dental-chart/DentalChartModule';
 import { User } from './types';
 import { getSocket } from './services/socket';
 import api from './services/api';
@@ -43,7 +41,8 @@ export function App() {
     }
 
     if (params.get('tab')) {
-      setActiveTab(params.get('tab')!);
+      const t = params.get('tab')!;
+      setActiveTab(t === 'dental-chart' ? 'operations-examination' : t);
     }
 
     // Connect socket
@@ -68,6 +67,44 @@ export function App() {
     setUser(null);
   };
 
+  const parseAllowedModules = (raw: any): string[] => {
+    if (!raw) return ['appointments', 'operations', 'patients', 'dental-lab'];
+    if (Array.isArray(raw)) return raw;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (e) {
+      return String(raw).split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    return ['appointments', 'operations', 'patients', 'dental-lab'];
+  };
+
+  const handleLoginSuccess = (loggedInUser: User) => {
+    setUser(loggedInUser);
+    const isDoctor = loggedInUser.role === 'DOCTOR_DENTAL' || loggedInUser.role === 'DOCTOR_ORTHO';
+    if (isDoctor) {
+      const allowed = parseAllowedModules(loggedInUser.allowedModules);
+      setActiveTab(allowed[0] || 'appointments');
+    } else {
+      setActiveTab('dashboard');
+    }
+  };
+
+  // Guard: if doctor is active, prevent landing on unpermitted modules
+  useEffect(() => {
+    if (user) {
+      const isDoctor = user.role === 'DOCTOR_DENTAL' || user.role === 'DOCTOR_ORTHO';
+      if (isDoctor) {
+        const allowed = parseAllowedModules(user.allowedModules);
+        const baseTab = activeTab.split('-')[0];
+        const isAllowed = allowed.includes(activeTab) || allowed.includes(baseTab);
+        if (!isAllowed) {
+          setActiveTab(allowed[0] || 'appointments');
+        }
+      }
+    }
+  }, [user, activeTab]);
+
   const handleNavigate = (tab: string, param?: any) => {
     if (tab === 'patients' && param) {
       setSelectedPatientNav(param);
@@ -77,6 +114,7 @@ export function App() {
 
   const handleQuickAction = (action: string) => {
     if (action === 'register-patient') {
+      setSelectedPatientNav(null);
       setActiveTab('patients');
     } else if (action === 'book-appointment') {
       setActiveTab('appointments');
@@ -84,10 +122,14 @@ export function App() {
   };
 
   const getTabTitle = (tab: string) => {
+    if (tab === 'pharmacy-billing' || tab === 'pharmacy') return 'Pharmacy: Billing Desk (POS)';
+    if (tab === 'pharmacy-inventory') return 'Pharmacy: Add Inventory';
+    if (tab === 'pharmacy-orders') return 'Pharmacy: Stock Orders';
+    if (tab === 'pharmacy-stock') return 'Pharmacy: Stock & Batches';
+    if (tab === 'pharmacy-history') return 'Pharmacy: Invoices Archive';
     if (tab === 'operations' || tab === 'operations-examination') return 'Operations: Clinical Notes & Examination';
     if (tab === 'operations-procedures') return 'Operations: Procedures & Treatments';
     if (tab === 'operations-history') return 'Operations: Clinical & Treatment History';
-    if (tab === 'clinical-notes') return '9-Field Clinical Notes';
     if (tab === 'dental-lab' || tab === 'dental-lab-dashboard') return 'Dental Lab: Overview & Dashboard';
     if (tab === 'dental-lab-reports') return 'Dental Lab: Patient Lab Reports';
     if (tab === 'dental-lab-create') return 'Dental Lab: Add Lab Report';
@@ -95,17 +137,7 @@ export function App() {
   };
 
   if (!user) {
-    return <LoginPage onLoginSuccess={(u) => setUser(u)} />;
-  }
-
-  // Full-width 3D Dental Charting Workspace (Bypasses sidebar and clinic layout)
-  if (activeTab === 'dental-chart') {
-    return (
-      <DentalChartModule
-        initialPatientId={selectedPatientNav || undefined}
-        onBack={() => setActiveTab('dashboard')}
-      />
-    );
+    return <LoginPage onLoginSuccess={handleLoginSuccess} />;
   }
 
   return (
@@ -113,14 +145,19 @@ export function App() {
       {/* Sidebar */}
       <Sidebar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={(tab) => {
+          if (tab === 'patients') {
+            setSelectedPatientNav(null);
+          }
+          setActiveTab(tab);
+        }}
         user={user}
         onLogout={handleLogout}
         isSocketConnected={isSocketConnected}
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
+      <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#f0f5fa]">
         <Header
           user={user}
           onQuickAction={handleQuickAction}
@@ -129,13 +166,16 @@ export function App() {
           isSocketConnected={isSocketConnected}
         />
 
-        <main className="flex-1 overflow-y-auto p-5 lg:p-7">
+        <main className="flex-1 overflow-y-auto p-5 lg:p-7 bg-[#f0f5fa]">
           <div className="w-full h-full">
             {activeTab === 'dashboard' && <DashboardOverview onNavigate={handleNavigate} />}
             {activeTab === 'patients' && (
               <PatientModule
                 initialPatientId={selectedPatientNav}
-                onNavigateToNotes={() => setActiveTab('clinical-notes')}
+                onNavigateToNotes={(patientId) => {
+                  if (patientId) setSelectedPatientNav(patientId);
+                  setActiveTab('operations-examination');
+                }}
                 onNavigateToBilling={() => setActiveTab('billing')}
                 onNavigateToPharmacy={() => setActiveTab('pharmacy')}
                 onNavigateToAppointment={(patientId) => {
@@ -148,7 +188,7 @@ export function App() {
               <AppointmentModule
                 onNavigateToNotes={(patientId) => {
                   if (patientId) setSelectedPatientNav(patientId);
-                  setActiveTab('clinical-notes');
+                  setActiveTab('operations-examination');
                 }}
                 onNavigateToBilling={(aptOrPatientId) => {
                   if (typeof aptOrPatientId === 'string') {
@@ -163,9 +203,16 @@ export function App() {
                   if (patientId) setSelectedPatientNav(patientId);
                   setActiveTab('patients');
                 }}
+                onNavigateToPharmacy={(patientId) => {
+                  if (patientId) setSelectedPatientNav(patientId);
+                  setActiveTab('pharmacy');
+                }}
+                onNavigateToProcedures={(patientId) => {
+                  if (patientId) setSelectedPatientNav(patientId);
+                  setActiveTab('operations-procedures');
+                }}
               />
             )}
-            {activeTab === 'clinical-notes' && <ClinicalNotesModule />}
             {activeTab === 'billing' && (
               <ConsultationBillingModule
                 initialTab={pendingProcedureToBill ? 'procedure' : 'consultation'}
@@ -179,7 +226,18 @@ export function App() {
                 }}
               />
             )}
-            {activeTab === 'pharmacy' && <PharmacyModule />}
+            {activeTab.startsWith('pharmacy') && (
+              <PharmacyModule
+                subTab={activeTab}
+                onSubTabChange={(tab) => setActiveTab(tab)}
+                selectedPatientNav={
+                  selectedPatientNav
+                    ? ({ id: selectedPatientNav, name: '', uhid: '', mobile: '', age: 0, gender: 'MALE' } as any)
+                    : null
+                }
+                onClearPatientNav={() => setSelectedPatientNav(null)}
+              />
+            )}
             {activeTab.startsWith('operations') && (
               <OperationsModule
                 initialSubModule={
@@ -189,10 +247,15 @@ export function App() {
                     ? 'history'
                     : 'examination'
                 }
+                initialPatientId={selectedPatientNav}
                 onSubModuleChange={(sm) => {
                   if (sm === 'examination') setActiveTab('operations-examination');
                   else if (sm === 'procedures') setActiveTab('operations-procedures');
                   else if (sm === 'history') setActiveTab('operations-history');
+                }}
+                onNavigateToAppointments={(patientId) => {
+                  if (patientId) setSelectedPatientNav(patientId);
+                  setActiveTab('appointments');
                 }}
                 onNavigateToBillingProcedure={(proc) => {
                   setPendingProcedureToBill(proc);

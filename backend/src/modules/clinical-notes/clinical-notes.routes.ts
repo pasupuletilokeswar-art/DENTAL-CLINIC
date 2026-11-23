@@ -151,10 +151,12 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
       note,
     });
   } catch (err: any) {
+    console.error('Error saving clinical examination:', err);
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ success: false, errors: err.errors });
+      const msg = err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ');
+      return res.status(400).json({ success: false, message: msg, errors: err.errors });
     }
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message || 'Failed to save clinical examination note' });
   }
 });
 
@@ -200,46 +202,43 @@ router.put('/:id', authenticateToken, async (req: Request, res: Response) => {
       note: updated,
     });
   } catch (err: any) {
+    console.error('Error saving clinical examination:', err);
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ success: false, errors: err.errors });
+      const msg = err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ');
+      return res.status(400).json({ success: false, message: msg, errors: err.errors });
     }
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message || 'Failed to save clinical examination note' });
   }
 });
 
 // Enhanced Clinical Examination Schema (Sub-module 1)
-const selectedToothItemSchema = z.object({
-  quadrant: z.enum(['UR', 'UL', 'LL', 'LR']),
-  position: z.number().int().min(1).max(8),
-  fdi: z.number().int(),
-  dentition: z.enum(['permanent', 'primary']).optional().nullable(),
-});
+const selectedToothItemSchema = z.any();
 
 const clinicalFindingItemSchema = z.object({
-  finding: z.string().min(1, 'Finding is required'),
-  toothNumber: z.string().optional().nullable(),
-  selectedTeeth: z.array(selectedToothItemSchema).optional().nullable(),
-  teeth: z.array(z.union([z.string(), z.number()])).optional().nullable(),
-  chartType: z.enum(['permanent', 'primary']).optional().nullable(),
+  finding: z.string().optional().nullable(),
+  toothNumber: z.any().optional().nullable(),
+  selectedTeeth: z.any().optional().nullable(),
+  teeth: z.any().optional().nullable(),
+  chartType: z.any().optional().nullable(),
   severity: z.string().optional().nullable(), // 'Mild' | 'Moderate' | 'Severe'
   details: z.string().optional().nullable(),
   observations: z.string().optional().nullable(),
 }).passthrough();
 
 const recommendedTreatmentItemSchema = z.object({
-  treatment: z.string().min(1, 'Treatment is required'),
+  treatment: z.string().optional().nullable(),
   priority: z.string().optional().nullable(), // 'Immediate' | 'High' | 'Normal' | 'Low'
   advice: z.string().optional().nullable(),
   plannedDate: z.string().optional().nullable(),
   followUpDate: z.string().optional().nullable(),
-});
+}).passthrough();
 
 const examinationNoteSchema = z.object({
   patientId: z.string().min(1, 'Patient is required'),
   doctorId: z.string().min(1, 'Doctor is required'),
   appointmentId: z.string().optional().nullable(),
   consultationDate: z.string().optional().nullable(),
-  chiefComplaints: z.union([z.string(), z.array(z.string())]),
+  chiefComplaints: z.union([z.string(), z.array(z.string())]).optional().nullable(),
   durationOfComplaint: z.string().optional().nullable(),
   patientDescription: z.string().optional().nullable(),
   clinicalFindings: z.array(clinicalFindingItemSchema).optional().nullable(),
@@ -247,7 +246,7 @@ const examinationNoteSchema = z.object({
   followUpDate: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   advice: z.string().optional().nullable(),
-});
+}).passthrough();
 
 // POST /api/clinical-notes/examination
 router.post('/examination', authenticateToken, async (req: Request, res: Response) => {
@@ -395,10 +394,12 @@ router.post('/examination', authenticateToken, async (req: Request, res: Respons
       note: createdNote,
     });
   } catch (err: any) {
+    console.error('Error saving clinical examination:', err);
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ success: false, errors: err.errors });
+      const msg = err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ');
+      return res.status(400).json({ success: false, message: msg, errors: err.errors });
     }
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message || 'Failed to save clinical examination note' });
   }
 });
 

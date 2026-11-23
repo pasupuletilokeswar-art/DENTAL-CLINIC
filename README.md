@@ -1,5 +1,6 @@
 # SUMMIT Dental & Orthopedic Clinic Management System
 
+
 A standalone, enterprise-grade, real-time medical clinic management application with PostgreSQL, React 19, Express.js, Prisma ORM, Socket.IO, and client-side PDF/WhatsApp sharing.
 
 ---

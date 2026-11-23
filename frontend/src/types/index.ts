@@ -5,6 +5,7 @@ export interface User {
   email: string | null;
   phone: string | null;
   role: 'RECEPTIONIST' | 'DOCTOR_DENTAL' | 'DOCTOR_ORTHO' | 'ADMIN';
+  allowedModules?: string[] | string | null;
   doctorProfile?: Doctor | null;
 }
 
@@ -47,10 +48,12 @@ export interface Appointment {
   startTime: string;
   endTime: string;
   durationMinutes: number;
-  visitType: 'NEW_VISIT' | 'FOLLOW_UP' | 'EMERGENCY' | 'ROUTINE_CHECKUP';
+  visitType: 'NEW_VISIT' | 'FOLLOW_UP' | 'EMERGENCY' | 'ROUTINE_CHECKUP' | 'PROCEDURE';
   procedureName?: string | null;
   status: 'SCHEDULED' | 'CONFIRMED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'NO_SHOW';
   reasonForVisit?: string | null;
+  reminderSent?: boolean;
+  reminderSentAt?: string | null;
   consultationBill?: ConsultationBill | null;
 }
 

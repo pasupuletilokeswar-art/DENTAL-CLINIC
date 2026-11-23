@@ -52,15 +52,14 @@ export const ToothInspectionPanel: React.FC<ToothInspectionPanelProps> = ({
   // Form State
   const [selectedCondition, setSelectedCondition] = useState<string>('Dental Caries');
   const [selectedSeverity, setSelectedSeverity] = useState<'Mild' | 'Moderate' | 'Severe' | 'Critical' | 'N/A'>('Moderate');
-  const [selectedTreatment, setSelectedTreatment] = useState<string>('Restoration');
-  const [notes, setNotes] = useState<string>('Caries on occlusal surface (16). No pulpal involvement.');
+  const [selectedTreatment, setSelectedTreatment] = useState<string>('');
+  const [notes, setNotes] = useState<string>('');
   const [saving, setSaving] = useState<boolean>(false);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
 
   // Update surface when tooth changes
   useEffect(() => {
     setSelectedSurface(tooth.isAnterior ? 'Incisal' : 'Occlusal');
-    setNotes(`Observation on Tooth ${tooth.fdi} (${tooth.isAnterior ? 'Incisal' : 'Occlusal'}).`);
   }, [tooth]);
 
   // Navigate Previous / Next tooth
@@ -281,6 +280,7 @@ export const ToothInspectionPanel: React.FC<ToothInspectionPanelProps> = ({
               onChange={(e) => setSelectedTreatment(e.target.value)}
               className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-teal-500 shadow-2xs cursor-pointer"
             >
+              <option value="">-- No Treatment / Observation Only --</option>
               <option value="Restoration">Restoration (Composite / Amalgam)</option>
               <option value="Root Canal Treatment">Root Canal Treatment (Endodontic)</option>
               <option value="Crown">Crown / Prosthetic Cap</option>

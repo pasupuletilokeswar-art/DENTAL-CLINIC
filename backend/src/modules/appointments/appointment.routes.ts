@@ -4,8 +4,27 @@ import { prisma } from '../../config/prisma';
 import { authenticateToken } from '../../middleware/auth';
 import { emitRealtimeEvent } from '../../sockets';
 import { AppointmentStatus, VisitType, Specialization } from '@prisma/client';
+import {
+  getTomorrowAppointments,
+  sendAppointmentReminder,
+  dispatchTomorrowReminders,
+  getTomorrowDateRange,
+} from '../../services/reminderScheduler';
 
 const router = Router();
+
+const visitTypeSchema = z.preprocess(
+  (val) => {
+    if (typeof val === 'string') {
+      const upper = val.toUpperCase().trim();
+      if (['NEW_VISIT', 'FOLLOW_UP', 'EMERGENCY', 'ROUTINE_CHECKUP', 'PROCEDURE'].includes(upper)) {
+        return upper;
+      }
+    }
+    return val;
+  },
+  z.enum(['NEW_VISIT', 'FOLLOW_UP', 'EMERGENCY', 'ROUTINE_CHECKUP', 'PROCEDURE']).default('NEW_VISIT')
+);
 
 const appointmentSchema = z.object({
   patientId: z.string().min(1, 'Patient is required'),
@@ -14,7 +33,7 @@ const appointmentSchema = z.object({
   appointmentDate: z.string().min(1, 'Appointment date is required'),
   startTime: z.string().min(1, 'Start time is required'),
   durationMinutes: z.number().int().min(10).default(30),
-  visitType: z.nativeEnum(VisitType).default(VisitType.NEW_VISIT),
+  visitType: visitTypeSchema,
   procedureName: z.string().optional(),
   reasonForVisit: z.string().optional(),
 });
@@ -53,7 +72,7 @@ async function generateAppointmentCode(): Promise<string> {
   return `${prefix}${seq.toString().padStart(5, '0')}`;
 }
 
-// GET /api/appointments/patient-active/:patientId - Check if patient already has an active appointment
+// GET /api/appointments/patient-active/:patientId - Check if patient already has an active appointment or previous consulting doctor
 router.get('/patient-active/:patientId', authenticateToken, async (req: Request, res: Response) => {
   try {
     const { patientId } = req.params;
@@ -69,10 +88,25 @@ router.get('/patient-active/:patientId', authenticateToken, async (req: Request,
       orderBy: { appointmentDate: 'asc' },
     });
 
+    const latestAppointment = await prisma.appointment.findFirst({
+      where: { patientId },
+      include: {
+        doctor: { include: { user: { select: { fullName: true } } } },
+        patient: { select: { id: true, name: true, patientCode: true } },
+      },
+      orderBy: { appointmentDate: 'desc' },
+    });
+
+    const doctorId = activeAppointment?.doctorId || latestAppointment?.doctorId || null;
+    const doctor = activeAppointment?.doctor || latestAppointment?.doctor || null;
+
     res.json({
       success: true,
       hasActiveAppointment: !!activeAppointment,
       activeAppointment: activeAppointment || null,
+      latestAppointment: latestAppointment || null,
+      doctorId,
+      doctor,
     });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
@@ -88,12 +122,12 @@ router.get('/calendar-summary', authenticateToken, async (req: Request, res: Res
 
     if (month && typeof month === 'string' && month.includes('-')) {
       const [year, m] = month.split('-').map(Number);
-      startDate = new Date(year, m - 1, 1, 0, 0, 0);
-      endDate = new Date(year, m, 1, 0, 0, 0);
+      startDate = new Date(Date.UTC(year, m - 1, 1, 0, 0, 0));
+      endDate = new Date(Date.UTC(year, m, 1, 0, 0, 0));
     } else {
       const now = new Date();
-      startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
-      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0);
+      startDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, 0, 0, 0));
+      endDate = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0));
     }
 
     const where: any = {
@@ -175,9 +209,12 @@ router.get('/busy-slots', authenticateToken, async (req: Request, res: Response)
 // GET /api/appointments - List appointments with filters
 router.get('/', authenticateToken, async (req: Request, res: Response) => {
   try {
-    const { date, doctorId, status, specialization } = req.query;
+    const { date, doctorId, status, specialization, patientId } = req.query;
 
     const where: any = {};
+    if (patientId && typeof patientId === 'string') {
+      where.patientId = patientId;
+    }
     if (doctorId && typeof doctorId === 'string') {
       where.doctorId = doctorId;
     }
@@ -218,10 +255,13 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
   try {
     const data = appointmentSchema.parse(req.body);
 
-    // 1. Prevent duplicate active appointments for the same patient
+    const { start: dayStart, end: dayEnd, exact: aptDate } = parseCalendarDateUTC(data.appointmentDate);
+
+    // 1. Prevent duplicate active appointments for the same patient on the same date
     const activeAppointment = await prisma.appointment.findFirst({
       where: {
         patientId: data.patientId,
+        appointmentDate: { gte: dayStart, lt: dayEnd },
         status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.IN_PROGRESS] },
       },
       include: {
@@ -231,6 +271,28 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
     });
 
     if (activeAppointment) {
+      // If the booking request is for a procedure or treatment, seamlessly link the procedure to the active appointment
+      if (data.visitType === 'PROCEDURE' || data.procedureName) {
+        const updated = await prisma.appointment.update({
+          where: { id: activeAppointment.id },
+          data: {
+            procedureName: data.procedureName || activeAppointment.procedureName,
+            reasonForVisit: data.reasonForVisit || activeAppointment.reasonForVisit,
+          },
+          include: {
+            patient: true,
+            doctor: { include: { user: { select: { fullName: true } } } },
+          },
+        });
+        emitRealtimeEvent('appointment:created', updated);
+        emitRealtimeEvent('appointment:updated', updated);
+        return res.status(200).json({
+          success: true,
+          message: `Procedure slot linked to patient's active appointment (${updated.appointmentCode}) for today`,
+          appointment: updated,
+        });
+      }
+
       const aptDateFormatted = activeAppointment.appointmentDate.toISOString().substring(0, 10);
       const aptTimeFormatted = new Date(activeAppointment.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       return res.status(409).json({
@@ -243,7 +305,6 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
 
     const startDateTime = new Date(data.startTime);
     const endDateTime = new Date(startDateTime.getTime() + data.durationMinutes * 60 * 1000);
-    const { exact: aptDate } = parseCalendarDateUTC(data.appointmentDate);
 
     // 2. Overlap conflict detection for the doctor
     const overlappingAppointment = await prisma.appointment.findFirst({
@@ -284,7 +345,7 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
         startTime: startDateTime,
         endTime: endDateTime,
         durationMinutes: data.durationMinutes,
-        visitType: data.visitType,
+        visitType: data.visitType as any,
         procedureName: data.procedureName || null,
         reasonForVisit: data.reasonForVisit || null,
         status: AppointmentStatus.SCHEDULED,
@@ -294,6 +355,9 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
         doctor: { include: { user: { select: { fullName: true } } } },
       },
     });
+
+    // New appointments for tomorrow start as reminderSent: false
+    // so front desk staff can review and send via WhatsApp.
 
     emitRealtimeEvent('appointment:created', appointment);
 
@@ -414,6 +478,41 @@ router.patch('/:id/status', authenticateToken, async (req: Request, res: Respons
       message: `Appointment status updated to ${status}`,
       appointment,
     });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/appointments/reminders/tomorrow - Summary and list of tomorrow's appointments
+router.get('/reminders/tomorrow', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const summary = await getTomorrowAppointments();
+    res.json({ success: true, ...summary });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/appointments/reminders/send-tomorrow - Trigger batch reminders for all tomorrow's pending appointments
+router.post('/reminders/send-tomorrow', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const result = await dispatchTomorrowReminders();
+    res.json({
+      success: true,
+      message: `Successfully processed reminders for tomorrow: ${result.dispatchedCount} dispatched.`,
+      ...result,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/appointments/:id/send-reminder - Manually send/re-send 1-day reminder for a specific appointment
+router.post('/:id/send-reminder', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const result = await sendAppointmentReminder(id);
+    res.json({ success: true, ...result });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }

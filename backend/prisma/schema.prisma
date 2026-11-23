@@ -44,6 +44,7 @@ enum VisitType {
   FOLLOW_UP
   EMERGENCY
   ROUTINE_CHECKUP
+  PROCEDURE
 }
 
 enum PaymentMode {
@@ -76,6 +77,7 @@ model User {
   email        String?     @unique
   phone        String?
   role         Role        @default(RECEPTIONIST)
+  allowedModules String?
   isActive     Boolean     @default(true)
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
@@ -149,6 +151,8 @@ model Appointment {
   status          AppointmentStatus @default(SCHEDULED)
   reasonForVisit  String?
   cancellationReason String?
+  reminderSent    Boolean           @default(false)
+  reminderSentAt  DateTime?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 

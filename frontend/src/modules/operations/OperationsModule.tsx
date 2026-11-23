@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Stethoscope,
   Scissors,
@@ -7,6 +7,7 @@ import {
   Layers,
   ChevronRight,
 } from 'lucide-react';
+import api from '../../services/api';
 import { Procedure, Patient } from '../../types';
 import { ClinicalExaminationSubModule } from './ClinicalExaminationSubModule';
 import { ProceduresTreatmentsSubModule, PROCEDURE_CATEGORIES, ProcedureCategoryGroup } from './ProceduresTreatmentsSubModule';
@@ -19,6 +20,7 @@ export type OperationsSubModuleType = 'examination' | 'procedures' | 'history';
 
 interface OperationsModuleProps {
   onNavigateToBillingProcedure?: (procedure: Procedure) => void;
+  onNavigateToAppointments?: (patientId?: string) => void;
   initialSubModule?: OperationsSubModuleType;
   initialPatientId?: string | null;
   onSubModuleChange?: (subModule: OperationsSubModuleType) => void;
@@ -26,6 +28,7 @@ interface OperationsModuleProps {
 
 export const OperationsModule: React.FC<OperationsModuleProps> = ({
   onNavigateToBillingProcedure,
+  onNavigateToAppointments,
   initialSubModule = 'examination',
   initialPatientId = null,
   onSubModuleChange,
@@ -38,6 +41,19 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
       setActiveSubModule(initialSubModule);
     }
   }, [initialSubModule]);
+
+  // Load patient context if initialPatientId is passed from other modules
+  useEffect(() => {
+    if (initialPatientId && (!activePatientContext || activePatientContext.id !== initialPatientId)) {
+      api.get(`/patients/${initialPatientId}`)
+        .then((res) => {
+          if (res.data.success && res.data.patient) {
+            setActivePatientContext(res.data.patient);
+          }
+        })
+        .catch(() => null);
+    }
+  }, [initialPatientId]);
 
   const handleSubModuleSwitch = (sm: OperationsSubModuleType) => {
     setActiveSubModule(sm);
@@ -122,6 +138,7 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
         {activeSubModule === 'examination' && (
           <ClinicalExaminationSubModule
             initialPatient={activePatientContext}
+            onNavigateToAppointments={onNavigateToAppointments}
             onNavigateToProcedures={(p) => {
               setActivePatientContext(p);
               handleSubModuleSwitch('procedures');
@@ -138,6 +155,7 @@ export const OperationsModule: React.FC<OperationsModuleProps> = ({
           <ProceduresTreatmentsSubModule
             initialPatient={activePatientContext}
             onNavigateToBillingProcedure={onNavigateToBillingProcedure}
+            onNavigateToAppointments={onNavigateToAppointments}
             onNavigateToHistory={(p) => {
               setActivePatientContext(p);
               handleSubModuleSwitch('history');

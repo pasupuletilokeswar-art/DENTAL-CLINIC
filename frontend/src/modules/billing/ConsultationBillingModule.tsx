@@ -52,6 +52,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
   // New Consultation Invoice Modal
   const [showModal, setShowModal] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+  const [selectedAppointmentId, setSelectedAppointmentId] = useState<string>('');
   const [selectedDoctorId, setSelectedDoctorId] = useState('');
   const [consultationFee, setConsultationFee] = useState(600);
   const [discount, setDiscount] = useState(0);
@@ -97,6 +98,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
   useEffect(() => {
     if (pendingAppointmentToBill) {
       setBillingTab('consultation');
+      setSelectedAppointmentId(pendingAppointmentToBill.id || '');
       if (pendingAppointmentToBill.patient) {
         setSelectedPatient(pendingAppointmentToBill.patient);
       }
@@ -110,6 +112,30 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       setShowModal(true);
     }
   }, [pendingAppointmentToBill]);
+
+  // Auto-detect unbilled appointment if patient is manually searched/selected
+  useEffect(() => {
+    if (selectedPatient && !selectedAppointmentId) {
+      api.get(`/appointments?patientId=${selectedPatient.id}`)
+        .then((res) => {
+          if (res.data.success && res.data.appointments?.length > 0) {
+            const unbilled = res.data.appointments.find((a: any) => !a.consultationBill && a.status !== 'CANCELLED');
+            if (unbilled) {
+              setSelectedAppointmentId(unbilled.id);
+              if (unbilled.doctorId) {
+                setSelectedDoctorId(unbilled.doctorId);
+              }
+              if (unbilled.doctor?.consultationFee) {
+                setConsultationFee(unbilled.doctor.consultationFee);
+                setPaidAmount(unbilled.doctor.consultationFee);
+              }
+              setNotes(`Consultation fee for ${unbilled.appointmentCode || 'appointment'} (${unbilled.visitType || 'Visit'})`);
+            }
+          }
+        })
+        .catch(() => null);
+    }
+  }, [selectedPatient]);
 
   const fetchBills = async () => {
     try {
@@ -208,6 +234,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       const payload = {
         patientId: selectedPatient.id,
         doctorId: selectedDoctorId,
+        appointmentId: selectedAppointmentId || pendingAppointmentToBill?.id || undefined,
         consultationFee,
         discount,
         taxRate,
@@ -221,6 +248,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       if (res.data.success) {
         setShowModal(false);
         setSelectedPatient(null);
+        setSelectedAppointmentId('');
         if (onClearPendingAppointment) onClearPendingAppointment();
         fetchBills();
       }
@@ -788,26 +816,29 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
         </div>
       )}
 
-      {/* Create Consultation Invoice Modal */}
+      {/* Create Consultation Invoice Modal (Horizontal Layout) */}
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-4xl xl:max-w-5xl w-full p-6 sm:p-7 shadow-2xl border border-slate-100 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-              <h3 className="text-base font-bold text-slate-800">Generate Consultation Invoice</h3>
+              <div>
+                <h3 className="text-base font-black text-slate-800">Generate Consultation Invoice</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Create professional digital invoice and tax receipt</p>
+              </div>
               <button
                 onClick={() => {
                   setShowModal(false);
                   setSelectedPatient(null);
                   if (onClearPendingAppointment) onClearPendingAppointment();
                 }}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
             {pendingAppointmentToBill && (
-              <div className="mt-3 p-3 bg-sky-50 border border-sky-200 text-sky-800 rounded-xl text-xs flex items-center justify-between">
+              <div className="mt-4 p-3 bg-sky-50 border border-sky-200 text-sky-800 rounded-xl text-xs flex items-center justify-between">
                 <div>
                   <span className="font-bold">Auto-filled from Appointment:</span> {pendingAppointmentToBill.appointmentCode}
                   <div className="text-[11px] text-sky-600 mt-0.5">
@@ -838,151 +869,189 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleCreateBill} className="mt-4 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Search Patient (Name, Phone, or DOC ID) *
-                </label>
-                <PatientSearchSelect
-                  selectedPatient={selectedPatient}
-                  onSelect={(p) => setSelectedPatient(p)}
-                  placeholder="Type to search and select patient..."
-                  required
-                />
-              </div>
+            <form onSubmit={handleCreateBill} className="mt-5 space-y-5">
+              {/* Horizontal 2-Column Split */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                {/* Left Column: Patient & Doctor Info */}
+                <div className="space-y-4 bg-slate-50/80 p-5 rounded-2xl border border-slate-200/80">
+                  <div className="flex items-center gap-2 pb-2.5 border-b border-slate-200/60">
+                    <span className="w-5 h-5 rounded-full bg-teal-600 text-white font-black text-[11px] flex items-center justify-center">1</span>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">Patient & Practitioner</h4>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Doctor *</label>
-                <select
-                  required
-                  value={selectedDoctorId}
-                  onChange={(e) => handleDoctorChange(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 focus:bg-white"
-                >
-                  {doctors.map((doc) => (
-                    <option key={doc.id} value={doc.id}>
-                      {doc.user.fullName} ({doc.specialization}) - Standard Fee: ₹{doc.consultationFee}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Search Patient (Name, Phone, or DOC ID) *
+                    </label>
+                    <PatientSearchSelect
+                      selectedPatient={selectedPatient}
+                      onSelect={(p) => setSelectedPatient(p)}
+                      placeholder="Type to search and select patient..."
+                      required
+                    />
+                  </div>
 
-              {/* Auto-Fetched Doctor Practice & Consultation Fee Details */}
-              {(() => {
-                const currentDoc = doctors.find((d) => d.id === selectedDoctorId);
-                if (!currentDoc) return null;
-                return (
-                  <div className="p-3 bg-teal-50/80 border border-teal-200 rounded-xl flex items-center justify-between text-xs">
-                    <div>
-                      <div className="font-bold text-teal-950 flex items-center gap-1.5">
-                        <span>{currentDoc.specialization === 'DENTAL' ? '🦷' : '🦴'}</span>
-                        <span>{currentDoc.user.fullName}</span>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-200/80 text-teal-900 uppercase">
-                          {currentDoc.specialization} SPECIALIST
-                        </span>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Doctor *</label>
+                    <select
+                      required
+                      value={selectedDoctorId}
+                      onChange={(e) => handleDoctorChange(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 font-medium"
+                    >
+                      {doctors.map((doc) => (
+                        <option key={doc.id} value={doc.id}>
+                          {doc.user.fullName} ({doc.specialization}) - Standard Fee: ₹{doc.consultationFee}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Auto-Fetched Doctor Practice & Consultation Fee Details */}
+                  {(() => {
+                    const currentDoc = doctors.find((d) => d.id === selectedDoctorId);
+                    if (!currentDoc) return null;
+                    return (
+                      <div className="p-3 bg-teal-50 border border-teal-200/80 rounded-xl flex items-center justify-between text-xs">
+                        <div>
+                          <div className="font-bold text-teal-950 flex items-center gap-1.5">
+                            <span>{currentDoc.specialization === 'DENTAL' ? '🦷' : '🦴'}</span>
+                            <span>{currentDoc.user.fullName}</span>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-200/80 text-teal-900 uppercase">
+                              {currentDoc.specialization} SPECIALIST
+                            </span>
+                          </div>
+                          {currentDoc.licenseNumber && (
+                            <div className="text-[11px] text-teal-700 mt-0.5">{currentDoc.licenseNumber}</div>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[10px] uppercase font-bold text-teal-700">Standard Fee</div>
+                          <div className="text-sm font-extrabold text-teal-950">₹{currentDoc.consultationFee}</div>
+                        </div>
                       </div>
-                      {currentDoc.licenseNumber && (
-                        <div className="text-[11px] text-teal-700 mt-0.5">{currentDoc.licenseNumber}</div>
-                      )}
+                    );
+                  })()}
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Transaction Ref / Notes</label>
+                    <input
+                      type="text"
+                      value={referenceNumber}
+                      onChange={(e) => setReferenceNumber(e.target.value)}
+                      placeholder="e.g. UPI Ref ID, card transaction number, notes..."
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Right Column: Fee Calculation & Payment */}
+                <div className="space-y-4 bg-slate-50/80 p-5 rounded-2xl border border-slate-200/80">
+                  <div className="flex items-center gap-2 pb-2.5 border-b border-slate-200/60">
+                    <span className="w-5 h-5 rounded-full bg-teal-600 text-white font-black text-[11px] flex items-center justify-center">2</span>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">Fee & Payment Breakdown</h4>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Fee (₹)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={consultationFee}
+                        onChange={(e) => setConsultationFee(parseFloat(e.target.value) || 0)}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 font-bold"
+                      />
                     </div>
-                    <div className="text-right">
-                      <div className="text-[10px] uppercase font-bold text-teal-700">Auto-Fetched Fee</div>
-                      <div className="text-sm font-extrabold text-teal-950">₹{currentDoc.consultationFee}</div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Discount (₹)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={discount}
+                        onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">GST Tax (%)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={taxRate}
+                        onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500"
+                      />
                     </div>
                   </div>
-                );
-              })()}
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Fee (₹)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={consultationFee}
-                    onChange={(e) => setConsultationFee(parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500"
-                  />
-                </div>
+                  {/* Highlighted Total Box */}
+                  <div className="p-3.5 bg-gradient-to-r from-teal-50 to-emerald-50 border border-teal-200 rounded-xl flex items-center justify-between text-xs">
+                    <div>
+                      <span className="font-bold text-teal-900 block">Total Invoice Amount:</span>
+                      <span className="text-[10px] text-teal-700">Fee - Discount + Tax</span>
+                    </div>
+                    <span className="font-black text-teal-900 text-lg">₹{calculateTotal()}</span>
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Discount (₹)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={discount}
-                    onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500"
-                  />
-                </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Payment Received (₹)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={paidAmount}
+                        onChange={(e) => setPaidAmount(parseFloat(e.target.value) || 0)}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 font-bold text-slate-900"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">GST Tax (%)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={taxRate}
-                    onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500"
-                  />
-                </div>
-              </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Payment Mode</label>
+                      <select
+                        value={paymentMode}
+                        onChange={(e) => setPaymentMode(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 font-bold"
+                      >
+                        <option value="CASH">Cash</option>
+                        <option value="UPI">UPI / GPay / PhonePe</option>
+                        <option value="CARD">Credit/Debit Card</option>
+                        <option value="BANK_TRANSFER">Bank Transfer</option>
+                      </select>
+                    </div>
+                  </div>
 
-              <div className="p-3 bg-teal-50/50 border border-teal-200/60 rounded-xl flex items-center justify-between text-xs">
-                <span className="font-semibold text-teal-900">Total Invoice Amount:</span>
-                <span className="font-bold text-teal-800 text-sm">₹{calculateTotal()}</span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Payment Received (₹)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={paidAmount}
-                    onChange={(e) => setPaidAmount(parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Payment Mode</label>
-                  <select
-                    value={paymentMode}
-                    onChange={(e) => setPaymentMode(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500"
-                  >
-                    <option value="CASH">Cash</option>
-                    <option value="UPI">UPI / GPay / PhonePe</option>
-                    <option value="CARD">Credit/Debit Card</option>
-                    <option value="BANK_TRANSFER">Bank Transfer</option>
-                  </select>
+                  {/* Live Balance / Due Status */}
+                  {(() => {
+                    const tot = calculateTotal();
+                    const due = Math.max(0, tot - paidAmount);
+                    return (
+                      <div className="p-2.5 px-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between text-xs">
+                        <span className="text-slate-500 font-medium">Pending Balance:</span>
+                        <span className={`font-black ${due > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                          {due > 0 ? `₹${due.toFixed(2)} (Due)` : '₹0.00 (Fully Settled ✓)'}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Transaction Ref / Notes</label>
-                <input
-                  type="text"
-                  value={referenceNumber}
-                  onChange={(e) => setReferenceNumber(e.target.value)}
-                  placeholder="UPI Ref ID, card transaction number..."
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500"
-                />
-              </div>
-
+              {/* Bottom Actions */}
               <div className="pt-4 flex justify-end gap-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-xl text-xs font-semibold text-slate-600 transition cursor-pointer"
+                  className="px-5 py-2.5 border border-slate-200 hover:bg-slate-50 rounded-xl text-xs font-semibold text-slate-600 transition cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-semibold transition shadow-sm disabled:opacity-50 cursor-pointer"
+                  className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition shadow-sm disabled:opacity-50 cursor-pointer flex items-center gap-2"
                 >
                   {submitting ? 'Generating...' : 'Generate Invoice & Receipt'}
                 </button>
