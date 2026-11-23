@@ -297,6 +297,16 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
     setShowRegisterModal(true);
   };
 
+  // Clean Doctor Name formatter to avoid "Dr. Dr. ..."
+  const formatDoctorName = (name?: string): string => {
+    if (!name) return 'Doctor';
+    const clean = name.trim();
+    if (clean.toLowerCase().startsWith('dr.') || clean.toLowerCase().startsWith('dr ')) {
+      return clean;
+    }
+    return `Dr. ${clean}`;
+  };
+
   // Safe Exact Date & Time Parser
   const parseExactDateTime = (dateVal: any, timeVal?: any) => {
     let ts = 0;
@@ -435,7 +445,7 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
         timeStr: dt.timeStr,
         fullStr: dt.fullStr,
         title: `Appointment: ${apt.procedureName || apt.visitType || 'General Consultation'}`,
-        subtitle: `Dr. ${apt.doctor?.user?.fullName || 'Doctor'} (${apt.specialization || 'DENTAL'}) • Slot: ${apt.timeSlot || dt.timeStr}`,
+        subtitle: `${formatDoctorName(apt.doctor?.user?.fullName)} (${apt.specialization || 'DENTAL'}) • Slot: ${apt.timeSlot || dt.timeStr}`,
         status: apt.status || 'SCHEDULED',
         badgeColor: 'bg-sky-100 text-sky-800 border-sky-300',
         icon: Calendar,
@@ -453,7 +463,7 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
         timeStr: dt.timeStr,
         fullStr: dt.fullStr,
         title: `Clinical Note & Diagnosis`,
-        subtitle: `Dr. ${cn.doctor?.user?.fullName || 'Doctor'} • Complaint: ${cn.chiefComplaints || 'Checkup'}`,
+        subtitle: `${formatDoctorName(cn.doctor?.user?.fullName)} • Complaint: ${cn.chiefComplaints || 'Checkup'}`,
         details: cn.diagnosis ? `Diagnosis: ${cn.diagnosis}` : undefined,
         recommendations: cn.treatmentRecommendations,
         badgeColor: 'bg-indigo-100 text-indigo-800 border-indigo-300',
@@ -474,7 +484,7 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
         timeStr: dt.timeStr,
         fullStr: dt.fullStr,
         title: `Procedure: ${procName}`,
-        subtitle: `Dr. ${dentist}${proc.toothNumber ? ` • Tooth #${proc.toothNumber}` : ''}`,
+        subtitle: `${formatDoctorName(dentist)}${proc.toothNumber ? ` • Tooth #${proc.toothNumber}` : ''}`,
         details: proc.clinicalNotes,
         status: (proc.status || 'PLANNED').toUpperCase(),
         badgeColor: 'bg-teal-100 text-teal-800 border-teal-300',
@@ -1757,7 +1767,7 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
                                 </div>
                               </div>
                               <div className="text-[11px] text-slate-600">
-                                Attending: <strong>Dr. {apt.doctor?.user?.fullName || 'Doctor'}</strong> (
+                                Attending: <strong>{formatDoctorName(apt.doctor?.user?.fullName)}</strong> (
                                 {apt.specialization || 'DENTAL'}) • Slot: {apt.timeSlot || dt.timeStr}
                               </div>
                             </div>
@@ -1802,7 +1812,7 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
                                 </div>
                               </div>
                               <div className="text-[11px] text-slate-600">
-                                Surgeon: Dr. {proc.doctor?.user?.fullName || proc.dentistName || 'Dentist'} • Notes:{' '}
+                                Surgeon: {formatDoctorName(proc.doctor?.user?.fullName || proc.dentistName)} • Notes:{' '}
                                 {proc.clinicalNotes || 'None'}
                               </div>
                             </div>
@@ -1848,7 +1858,7 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
                                       Doctor Consultation Completed
                                     </h4>
                                     <p className="text-[11px] text-indigo-800/80 mt-0.5">
-                                      Attended by Dr. {docName}
+                                      Attended by {formatDoctorName(docName)}
                                       {cBill && ` • Consultation Invoice #${cBill.invoiceNumber} (₹${cBill.totalAmount} Settled)`}
                                     </p>
                                   </div>
@@ -1902,7 +1912,7 @@ export const PatientModule: React.FC<PatientModuleProps> = ({
                             </div>
 
                             <div className="text-[11px] text-slate-600">
-                              Attending Doctor: Dr. {cn.doctor?.user?.fullName || 'Doctor'}
+                              Attending Doctor: {formatDoctorName(cn.doctor?.user?.fullName)}
                             </div>
 
                             {cn.diagnosis && (

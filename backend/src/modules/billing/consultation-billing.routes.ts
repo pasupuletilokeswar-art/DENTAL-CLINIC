@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../../config/prisma';
 import { authenticateToken } from '../../middleware/auth';
 import { emitRealtimeEvent } from '../../sockets';
-import { PaymentMode, PaymentStatus, AppointmentStatus } from '@prisma/client';
+import { PaymentMode, PaymentStatus, AppointmentStatus, VisitType } from '@prisma/client';
 
 const router = Router();
 
@@ -104,6 +104,7 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
           patientId: data.patientId,
           appointmentDate: { gte: todayStart, lte: todayEnd },
           status: { not: AppointmentStatus.CANCELLED },
+          visitType: { not: VisitType.PROCEDURE },
           consultationBill: null,
         },
         orderBy: { createdAt: 'desc' },

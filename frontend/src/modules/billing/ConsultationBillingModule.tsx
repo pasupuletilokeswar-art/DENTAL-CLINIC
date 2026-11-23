@@ -11,6 +11,7 @@ import {
   FileText,
   Scissors,
   Share2,
+  Lock,
 } from 'lucide-react';
 import api from '../../services/api';
 import { Patient, Doctor, ConsultationBill, Procedure } from '../../types';
@@ -56,6 +57,8 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
   const [selectedDoctorId, setSelectedDoctorId] = useState('');
   const [consultationFee, setConsultationFee] = useState(600);
   const [discount, setDiscount] = useState(0);
+  const [discountType, setDiscountType] = useState<'INR' | 'PERCENT'>('INR');
+  const [discountInputVal, setDiscountInputVal] = useState<number>(0);
   const [taxRate, setTaxRate] = useState(0); // GST %
   const [paidAmount, setPaidAmount] = useState(600);
   const [paymentMode, setPaymentMode] = useState('CASH');
@@ -97,6 +100,11 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
   // Handle passed pending appointment from completed visit
   useEffect(() => {
     if (pendingAppointmentToBill) {
+      // Strictly prevent procedure visits from collecting consultation fee
+      if (pendingAppointmentToBill.visitType === 'PROCEDURE') {
+        setBillingTab('procedure');
+        return;
+      }
       setBillingTab('consultation');
       setSelectedAppointmentId(pendingAppointmentToBill.id || '');
       if (pendingAppointmentToBill.patient) {
@@ -107,6 +115,8 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       }
       const fee = pendingAppointmentToBill.doctor?.consultationFee || 600;
       setConsultationFee(fee);
+      setDiscount(0);
+      setDiscountInputVal(0);
       setPaidAmount(fee);
       setNotes(`Consultation fee for ${pendingAppointmentToBill.appointmentCode || 'appointment'} (${pendingAppointmentToBill.visitType || 'Visit'})`);
       setShowModal(true);
@@ -119,7 +129,10 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       api.get(`/appointments?patientId=${selectedPatient.id}`)
         .then((res) => {
           if (res.data.success && res.data.appointments?.length > 0) {
-            const unbilled = res.data.appointments.find((a: any) => !a.consultationBill && a.status !== 'CANCELLED');
+            // Strictly exclude procedure appointments & already billed visits
+            const unbilled = res.data.appointments.find(
+              (a: any) => !a.consultationBill && a.status !== 'CANCELLED' && a.visitType !== 'PROCEDURE'
+            );
             if (unbilled) {
               setSelectedAppointmentId(unbilled.id);
               if (unbilled.doctorId) {
@@ -127,6 +140,8 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
               }
               if (unbilled.doctor?.consultationFee) {
                 setConsultationFee(unbilled.doctor.consultationFee);
+                setDiscount(0);
+                setDiscountInputVal(0);
                 setPaidAmount(unbilled.doctor.consultationFee);
               }
               setNotes(`Consultation fee for ${unbilled.appointmentCode || 'appointment'} (${unbilled.visitType || 'Visit'})`);
@@ -205,19 +220,46 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
     };
   }, []);
 
+  const calculateDiscountAmount = (fee: number, discVal: number, type: 'INR' | 'PERCENT') => {
+    if (type === 'PERCENT') {
+      const pct = Math.min(100, Math.max(0, discVal));
+      return Math.round(((fee * pct) / 100) * 100) / 100;
+    }
+    return Math.min(fee, Math.max(0, discVal));
+  };
+
+  const calculateTotal = (fee = consultationFee, disc = discount, tax = taxRate) => {
+    const subTotal = Math.max(0, fee - disc);
+    const taxAmt = (subTotal * tax) / 100;
+    return Math.round((subTotal + taxAmt) * 100) / 100;
+  };
+
   const handleDoctorChange = (docId: string) => {
     setSelectedDoctorId(docId);
     const doc = doctors.find((d) => d.id === docId);
     if (doc) {
-      setConsultationFee(doc.consultationFee);
-      setPaidAmount(doc.consultationFee);
+      const fee = doc.consultationFee;
+      setConsultationFee(fee);
+      const discAmt = calculateDiscountAmount(fee, discountInputVal, discountType);
+      setDiscount(discAmt);
+      const net = calculateTotal(fee, discAmt, taxRate);
+      setPaidAmount(net);
     }
   };
 
-  const calculateTotal = () => {
-    const subTotal = Math.max(0, consultationFee - discount);
-    const tax = (subTotal * taxRate) / 100;
-    return Math.round((subTotal + tax) * 100) / 100;
+  const handleDiscountChange = (val: number, type = discountType) => {
+    setDiscountInputVal(val);
+    setDiscountType(type);
+    const discAmt = calculateDiscountAmount(consultationFee, val, type);
+    setDiscount(discAmt);
+    const net = calculateTotal(consultationFee, discAmt, taxRate);
+    setPaidAmount(net); // Auto-update payment received field
+  };
+
+  const handleTaxRateChange = (tax: number) => {
+    setTaxRate(tax);
+    const net = calculateTotal(consultationFee, discount, tax);
+    setPaidAmount(net);
   };
 
   const handleCreateBill = async (e: React.FormEvent) => {
@@ -954,35 +996,70 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
 
                   <div className="grid grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Fee (₹)</label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">Fee (₹)</label>
+                        <span
+                          className="text-[9px] font-bold text-slate-500 bg-slate-200/80 px-1 py-0.2 rounded flex items-center gap-0.5"
+                          title="Doctor standard consultation fee is fixed from the doctor profile and unchangeable during billing"
+                        >
+                          <Lock className="w-2.5 h-2.5" />
+                          <span>Fixed</span>
+                        </span>
+                      </div>
+                      <input
+                        type="number"
+                        readOnly
+                        disabled
+                        value={consultationFee}
+                        className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-xl text-xs font-black text-slate-800 cursor-not-allowed select-none"
+                        title="Doctor standard consultation fee is fixed from the doctor profile and unchangeable during billing"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">Discount</label>
+                        <div className="flex items-center rounded-lg bg-slate-200/80 p-0.5 text-[9px] font-black">
+                          <button
+                            type="button"
+                            onClick={() => handleDiscountChange(discountInputVal, 'INR')}
+                            className={`px-1.5 py-0.5 rounded cursor-pointer ${discountType === 'INR' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500'}`}
+                          >
+                            ₹
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDiscountChange(discountInputVal, 'PERCENT')}
+                            className={`px-1.5 py-0.5 rounded cursor-pointer ${discountType === 'PERCENT' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500'}`}
+                          >
+                            %
+                          </button>
+                        </div>
+                      </div>
                       <input
                         type="number"
                         min="0"
-                        value={consultationFee}
-                        onChange={(e) => setConsultationFee(parseFloat(e.target.value) || 0)}
+                        max={discountType === 'PERCENT' ? 100 : consultationFee}
+                        value={discountInputVal || ''}
+                        onChange={(e) => handleDiscountChange(parseFloat(e.target.value) || 0)}
+                        placeholder="0"
                         className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 font-bold"
                       />
+                      {discount > 0 && discountType === 'PERCENT' && (
+                        <span className="text-[10px] text-teal-700 font-bold block mt-0.5">
+                          -₹{discount.toFixed(2)} off
+                        </span>
+                      )}
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Discount (₹)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={discount}
-                        onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">GST Tax (%)</label>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1">GST Tax (%)</label>
                       <input
                         type="number"
                         min="0"
                         value={taxRate}
-                        onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500"
+                        onChange={(e) => handleTaxRateChange(parseFloat(e.target.value) || 0)}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 font-bold"
                       />
                     </div>
                   </div>

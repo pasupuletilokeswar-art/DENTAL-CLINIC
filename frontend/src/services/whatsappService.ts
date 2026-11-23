@@ -7,11 +7,14 @@ export const sendWhatsAppMessage = (phone: string, message: string) => {
     cleanPhone = `91${cleanPhone}`; // Default to Indian country code +91
   }
   const encodedText = encodeURIComponent(message);
-  // Directly open WhatsApp Web using a single dedicated tab ('whatsapp_tab') to prevent multiple tabs competing and disconnecting
-  const url = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
-  const win = window.open(url, 'whatsapp_tab');
+  // Using api.whatsapp.com/send directly opens within the existing WhatsApp tab or client
+  // rather than forcing a heavy full web.whatsapp.com reload that triggers "WhatsApp is open in another window"
+  const url = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
+  const win = window.open(url, 'whatsapp_session');
   if (win) {
-    win.focus();
+    try {
+      win.focus();
+    } catch {}
   }
 };
 

@@ -1959,11 +1959,11 @@ We look forward to seeing you!`;
                           {onNavigateToBilling && !isBillPaid && (
                             <button
                               onClick={() => onNavigateToBilling(apt)}
-                              title="Collect Consultation Fee"
+                              title={apt.visitType === 'PROCEDURE' ? 'Collect Procedure Fee under Procedure Billing' : 'Collect Consultation Fee'}
                               className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
                             >
                               <CreditCard className="w-3.5 h-3.5 text-white" />
-                              <span>Bill / Collect</span>
+                              <span>{apt.visitType === 'PROCEDURE' ? 'Procedure Bill' : 'Bill / Collect'}</span>
                             </button>
                           )}
 
@@ -2267,11 +2267,11 @@ We look forward to seeing you!`;
                             {onNavigateToBilling && !isBillPaid && (
                               <button
                                 onClick={() => onNavigateToBilling(apt)}
-                                title="Collect Consultation Fee"
+                                title={apt.visitType === 'PROCEDURE' ? 'Collect Procedure Fee under Procedure Billing' : 'Collect Consultation Fee'}
                                 className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-xs"
                               >
                                 <CreditCard className="w-3.5 h-3.5 text-white" />
-                                <span>Bill / Collect</span>
+                                <span>{apt.visitType === 'PROCEDURE' ? 'Procedure Bill' : 'Bill / Collect'}</span>
                               </button>
                             )}
 

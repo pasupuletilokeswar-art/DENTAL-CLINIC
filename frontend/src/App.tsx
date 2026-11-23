@@ -194,7 +194,13 @@ export function App() {
                   if (typeof aptOrPatientId === 'string') {
                     setSelectedPatientNav(aptOrPatientId);
                   } else if (aptOrPatientId && typeof aptOrPatientId === 'object') {
-                    setPendingAppointmentToBill(aptOrPatientId);
+                    if (aptOrPatientId.visitType === 'PROCEDURE') {
+                      setPendingProcedureToBill(aptOrPatientId);
+                      setPendingAppointmentToBill(null);
+                    } else {
+                      setPendingAppointmentToBill(aptOrPatientId);
+                      setPendingProcedureToBill(null);
+                    }
                     if (aptOrPatientId.patientId) setSelectedPatientNav(aptOrPatientId.patientId);
                   }
                   setActiveTab('billing');

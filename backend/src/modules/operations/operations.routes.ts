@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../../config/prisma';
 import { authenticateToken } from '../../middleware/auth';
 import { emitRealtimeEvent } from '../../sockets';
-import { ProcedureStatus, PaymentMode, PaymentStatus } from '@prisma/client';
+import { ProcedureStatus, PaymentMode, PaymentStatus, AppointmentStatus } from '@prisma/client';
 
 const router = Router();
 
@@ -689,6 +689,40 @@ router.patch('/:id/status', authenticateToken, async (req: Request, res: Respons
       },
     });
 
+    // If procedure marked COMPLETED, automatically complete any matching scheduled/in-progress appointment for this patient on this day
+    if (targetStatus === ProcedureStatus.COMPLETED && proc.patientId) {
+      try {
+        const procDate = new Date(proc.procedureDate);
+        const startOfDay = new Date(procDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(procDate);
+        endOfDay.setHours(23, 59, 59, 999);
+
+        const matchingApt = await prisma.appointment.findFirst({
+          where: {
+            patientId: proc.patientId,
+            status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS] },
+            appointmentDate: { gte: startOfDay, lte: endOfDay },
+          },
+        });
+
+        if (matchingApt) {
+          const updatedApt = await prisma.appointment.update({
+            where: { id: matchingApt.id },
+            data: { status: AppointmentStatus.COMPLETED },
+            include: {
+              patient: true,
+              doctor: { include: { user: { select: { fullName: true } } } },
+            },
+          });
+          emitRealtimeEvent('appointment:updated', updatedApt);
+          emitRealtimeEvent('appointment:completed', updatedApt);
+        }
+      } catch (aptErr) {
+        console.error('Error auto-completing linked procedure appointment:', aptErr);
+      }
+    }
+
     emitRealtimeEvent('procedure:completed', proc);
     emitRealtimeEvent('procedure:updated', proc);
 
@@ -748,6 +782,33 @@ router.post('/:id/complete', authenticateToken, async (req: Request, res: Respon
         data: { status: ProcedureStatus.COMPLETED },
       });
 
+      // Also automatically mark the linked appointment as COMPLETED so it doesn't stay IN_PROGRESS
+      const procDate = new Date(proc.procedureDate);
+      const startOfDay = new Date(procDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(procDate);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const matchingApt = await tx.appointment.findFirst({
+        where: {
+          patientId: proc.patientId,
+          status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS] },
+          appointmentDate: { gte: startOfDay, lte: endOfDay },
+        },
+      });
+
+      let updatedApt = null;
+      if (matchingApt) {
+        updatedApt = await tx.appointment.update({
+          where: { id: matchingApt.id },
+          data: { status: AppointmentStatus.COMPLETED },
+          include: {
+            patient: true,
+            doctor: { include: { user: { select: { fullName: true } } } },
+          },
+        });
+      }
+
       // 2. Create Operation Bill
       const bill = await tx.operationBill.create({
         data: {
@@ -781,10 +842,14 @@ router.post('/:id/complete', authenticateToken, async (req: Request, res: Respon
         });
       }
 
-      return { updatedProc, bill, receipt };
+      return { updatedProc, bill, receipt, updatedApt };
     });
 
     emitRealtimeEvent('procedure:completed', result);
+    if (result.updatedApt) {
+      emitRealtimeEvent('appointment:updated', result.updatedApt);
+      emitRealtimeEvent('appointment:completed', result.updatedApt);
+    }
 
     res.json({
       success: true,
