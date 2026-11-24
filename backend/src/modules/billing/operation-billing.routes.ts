@@ -66,11 +66,18 @@ router.post('/operation/:id/payment', authenticateToken, async (req: Request, re
       });
 
       if (bill.procedure?.patientId) {
+        const procDate = bill.procedure.procedureDate ? new Date(bill.procedure.procedureDate) : new Date();
+        const startOfDay = new Date(procDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(procDate);
+        endOfDay.setHours(23, 59, 59, 999);
+
         const procName = (bill.procedure as any)?.procedureName || (bill.procedure as any)?.procedureMaster?.name;
         await tx.appointment.updateMany({
           where: {
             patientId: bill.procedure.patientId,
             status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS] },
+            appointmentDate: { gte: startOfDay, lte: endOfDay },
             OR: [
               { visitType: VisitType.PROCEDURE },
               ...(procName ? [{ procedureName: procName }] : []),

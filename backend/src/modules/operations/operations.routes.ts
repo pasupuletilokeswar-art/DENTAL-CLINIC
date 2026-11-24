@@ -783,6 +783,7 @@ router.post('/:id/complete', authenticateToken, async (req: Request, res: Respon
       });
 
       // Also automatically mark the linked appointment as COMPLETED so it doesn't stay IN_PROGRESS
+      // Guard strictly by date and appointment ID to NEVER complete future scheduled appointments!
       const procDate = new Date(proc.procedureDate);
       const startOfDay = new Date(procDate);
       startOfDay.setHours(0, 0, 0, 0);
@@ -793,17 +794,17 @@ router.post('/:id/complete', authenticateToken, async (req: Request, res: Respon
         where: {
           patientId: proc.patientId,
           status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS] },
+          appointmentDate: { gte: startOfDay, lte: endOfDay },
           OR: [
             { visitType: VisitType.PROCEDURE },
             ...(proc.procedureName ? [{ procedureName: proc.procedureName }] : []),
-            { appointmentDate: { gte: startOfDay, lte: endOfDay } },
           ],
         },
-        orderBy: { appointmentDate: 'desc' },
+        orderBy: { appointmentDate: 'asc' },
       });
 
       let updatedApt = null;
-      if (matchingApt) {
+      if (matchingApt && matchingApt.status !== AppointmentStatus.COMPLETED) {
         updatedApt = await tx.appointment.update({
           where: { id: matchingApt.id },
           data: { status: AppointmentStatus.COMPLETED },
@@ -814,11 +815,12 @@ router.post('/:id/complete', authenticateToken, async (req: Request, res: Respon
         });
       }
 
-      // Also ensure any other scheduled/in-progress procedure appointment for this patient is completed
+      // Also ensure any other scheduled/in-progress procedure appointment FOR TODAY ONLY is completed
       await tx.appointment.updateMany({
         where: {
           patientId: proc.patientId,
           status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS] },
+          appointmentDate: { gte: startOfDay, lte: endOfDay },
           OR: [
             { visitType: VisitType.PROCEDURE },
             ...(proc.procedureName ? [{ procedureName: proc.procedureName }] : []),

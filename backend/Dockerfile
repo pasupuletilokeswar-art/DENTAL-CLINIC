@@ -37,6 +37,7 @@ RUN npm ci
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY scripts ./scripts
 
 # Copy startup entrypoint script and set permissions
 COPY docker-entrypoint.sh ./docker-entrypoint.sh

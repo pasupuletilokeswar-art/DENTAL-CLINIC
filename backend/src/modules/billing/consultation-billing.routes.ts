@@ -138,12 +138,18 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
         });
       }
 
-      // Also ensure any active/scheduled consultation appointments for this patient are marked COMPLETED
+      // Also ensure any active/scheduled consultation appointments for this patient FOR TODAY ONLY are marked COMPLETED
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
       await tx.appointment.updateMany({
         where: {
           patientId: data.patientId,
           status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS] },
           visitType: { not: VisitType.PROCEDURE },
+          appointmentDate: { gte: todayStart, lte: todayEnd },
         },
         data: { status: AppointmentStatus.COMPLETED },
       });
