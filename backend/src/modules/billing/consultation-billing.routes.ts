@@ -91,20 +91,65 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
 
     const invoiceNumber = await generateBillNumber();
 
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
     // Auto-detect appointment if not explicitly passed: find active/completed unbilled consultation appointment for this patient
     let targetAppointmentId = data.appointmentId || null;
-    if (!targetAppointmentId) {
+
+    if (targetAppointmentId) {
+      const targetApt = await prisma.appointment.findUnique({
+        where: { id: targetAppointmentId },
+        include: { consultationBill: true },
+      });
+      if (!targetApt) {
+        return res.status(404).json({ success: false, message: 'Appointment not found' });
+      }
+      if (targetApt.visitType === VisitType.PROCEDURE) {
+        return res.status(400).json({
+          success: false,
+          message: 'Procedure appointments cannot be billed through consultation billing. Please use Procedure / Minor OT Billing.',
+        });
+      }
+      if (targetApt.consultationBill) {
+        return res.status(400).json({
+          success: false,
+          message: `This appointment already has an active consultation bill (Invoice #${targetApt.consultationBill.invoiceNumber} - ${targetApt.consultationBill.paymentStatus}). Duplicate billing is not allowed.`,
+        });
+      }
+    } else {
+      // Find unbilled consultation appointment for this patient for today
       const unbilledApt = await prisma.appointment.findFirst({
         where: {
           patientId: data.patientId,
-          status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS, AppointmentStatus.CONFIRMED] },
+          status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS, AppointmentStatus.CONFIRMED, AppointmentStatus.COMPLETED] },
           visitType: { not: VisitType.PROCEDURE },
+          appointmentDate: { gte: todayStart, lte: todayEnd },
           consultationBill: null,
         },
         orderBy: { appointmentDate: 'desc' },
       });
+
       if (unbilledApt) {
         targetAppointmentId = unbilledApt.id;
+      } else {
+        // Guard: Check if patient already has a consultation bill today
+        const existingBillToday = await prisma.consultationBill.findFirst({
+          where: {
+            patientId: data.patientId,
+            billDate: { gte: todayStart, lte: todayEnd },
+          },
+          orderBy: { billDate: 'desc' },
+        });
+
+        if (existingBillToday) {
+          return res.status(400).json({
+            success: false,
+            message: `Patient already has a consultation bill for today (Invoice #${existingBillToday.invoiceNumber} - ₹${existingBillToday.totalAmount} - ${existingBillToday.paymentStatus}). Duplicate consultation billing is not allowed on the same day.`,
+          });
+        }
       }
     }
 

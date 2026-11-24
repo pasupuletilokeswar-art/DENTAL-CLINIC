@@ -454,6 +454,7 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
     socket.on('billing:payment-received', handleRefresh);
     socket.on('procedure:completed', handleRefresh);
     socket.on('operation:invoice-created', handleRefresh);
+    socket.on('operation:invoice-paid', handleRefresh);
     socket.on('appointment:reminder_sent', () => {
       fetchAppointments();
       fetchTomorrowReminders();
@@ -467,6 +468,7 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
       socket.off('billing:payment-received', handleRefresh);
       socket.off('procedure:completed', handleRefresh);
       socket.off('operation:invoice-created', handleRefresh);
+      socket.off('operation:invoice-paid', handleRefresh);
       socket.off('appointment:reminder_sent');
     };
   }, [viewMode, selectedDate, doctorFilter, specializationFilter, showBookingModal, bookingData]);

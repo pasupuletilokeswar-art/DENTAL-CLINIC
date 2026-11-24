@@ -91,6 +91,9 @@ router.post('/operation/:id/payment', authenticateToken, async (req: Request, re
     });
 
     emitRealtimeEvent('billing:payment-received', result.updatedBill);
+    emitRealtimeEvent('operation:invoice-created', result.updatedBill);
+    emitRealtimeEvent('operation:invoice-paid', result.updatedBill);
+    emitRealtimeEvent('appointment:updated', { patientId: bill.procedure?.patientId });
 
     res.json({
       success: true,

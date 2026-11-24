@@ -54,6 +54,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
   const [showModal, setShowModal] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string>('');
+  const [patientTodayBill, setPatientTodayBill] = useState<any | null>(null);
   const [selectedDoctorId, setSelectedDoctorId] = useState('');
   const [consultationFee, setConsultationFee] = useState(600);
   const [discount, setDiscount] = useState(0);
@@ -126,32 +127,46 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
 
   // Auto-detect unbilled appointment if patient is manually searched/selected
   useEffect(() => {
-    if (selectedPatient && !selectedAppointmentId) {
-      api.get(`/appointments?patientId=${selectedPatient.id}`)
-        .then((res) => {
-          if (res.data.success && res.data.appointments?.length > 0) {
-            // Strictly exclude procedure appointments & already billed visits
-            const unbilled = res.data.appointments.find(
-              (a: any) => !a.consultationBill && a.status !== 'CANCELLED' && a.visitType !== 'PROCEDURE'
-            );
-            if (unbilled) {
-              setSelectedAppointmentId(unbilled.id);
-              if (unbilled.doctorId) {
-                setSelectedDoctorId(unbilled.doctorId);
+    if (selectedPatient) {
+      // Check if patient already has a consultation bill today
+      const todayStr = new Date().toISOString().substring(0, 10);
+      const existingToday = bills.find(
+        (b) => b.patientId === selectedPatient.id && String(b.billDate).substring(0, 10) === todayStr
+      );
+      setPatientTodayBill(existingToday || null);
+
+      if (!selectedAppointmentId) {
+        api.get(`/appointments?patientId=${selectedPatient.id}`)
+          .then((res) => {
+            if (res.data.success && res.data.appointments?.length > 0) {
+              // Strictly exclude procedure appointments & already billed visits
+              const unbilled = res.data.appointments.find(
+                (a: any) => !a.consultationBill && a.status !== 'CANCELLED' && a.visitType !== 'PROCEDURE'
+              );
+              if (unbilled) {
+                setSelectedAppointmentId(unbilled.id);
+                if (unbilled.doctorId) {
+                  setSelectedDoctorId(unbilled.doctorId);
+                }
+                if (unbilled.doctor?.consultationFee) {
+                  setConsultationFee(unbilled.doctor.consultationFee);
+                  setDiscount(0);
+                  setDiscountInputVal(0);
+                  setPaidAmount(unbilled.doctor.consultationFee);
+                }
+                setNotes(`Consultation fee for ${unbilled.appointmentCode || 'appointment'} (${unbilled.visitType || 'Visit'})`);
+              } else {
+                setSelectedAppointmentId('');
               }
-              if (unbilled.doctor?.consultationFee) {
-                setConsultationFee(unbilled.doctor.consultationFee);
-                setDiscount(0);
-                setDiscountInputVal(0);
-                setPaidAmount(unbilled.doctor.consultationFee);
-              }
-              setNotes(`Consultation fee for ${unbilled.appointmentCode || 'appointment'} (${unbilled.visitType || 'Visit'})`);
             }
-          }
-        })
-        .catch(() => null);
+          })
+          .catch(() => null);
+      }
+    } else {
+      setPatientTodayBill(null);
+      setSelectedAppointmentId('');
     }
-  }, [selectedPatient]);
+  }, [selectedPatient, bills]);
 
   const fetchBills = async () => {
     try {
@@ -267,6 +282,11 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
     e.preventDefault();
     if (!selectedPatient) {
       setFormError('Please search and select a patient first.');
+      return;
+    }
+
+    if (patientTodayBill && !selectedAppointmentId) {
+      setFormError(`Patient already has an active consultation bill for today (Invoice #${patientTodayBill.invoiceNumber} - ₹${patientTodayBill.totalAmount} - ${patientTodayBill.paymentStatus}). Duplicate billing is not allowed.`);
       return;
     }
 
@@ -946,6 +966,17 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
                       placeholder="Type to search and select patient..."
                       required
                     />
+                    {patientTodayBill && !selectedAppointmentId && (
+                      <div className="mt-2 p-3 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-xs flex items-start gap-2 shadow-2xs">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-black">Already Billed Today:</span> This patient already has a consultation bill generated today (<strong>#{patientTodayBill.invoiceNumber}</strong> • ₹{patientTodayBill.totalAmount} • {patientTodayBill.paymentStatus}).
+                          <div className="text-[11px] text-amber-800 mt-0.5">
+                            Duplicate consultation billing on the same day is prohibited unless a separate new appointment is booked.
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div>
@@ -1142,10 +1173,15 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting}
-                  className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition shadow-sm disabled:opacity-50 cursor-pointer flex items-center gap-2"
+                  disabled={submitting || (!!patientTodayBill && !selectedAppointmentId)}
+                  className={`px-6 py-2.5 rounded-xl text-xs font-bold transition shadow-sm disabled:opacity-50 flex items-center gap-2 ${
+                    patientTodayBill && !selectedAppointmentId
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                      : 'bg-teal-600 hover:bg-teal-700 text-white cursor-pointer'
+                  }`}
+                  title={patientTodayBill && !selectedAppointmentId ? 'Duplicate consultation billing is disabled because this patient has already been billed today' : ''}
                 >
-                  {submitting ? 'Generating...' : 'Generate Invoice & Receipt'}
+                  {submitting ? 'Generating...' : patientTodayBill && !selectedAppointmentId ? 'Already Billed Today' : 'Generate Invoice & Receipt'}
                 </button>
               </div>
             </form>
