@@ -91,23 +91,17 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
 
     const invoiceNumber = await generateBillNumber();
 
-    // Auto-detect appointment if not explicitly passed: find today's active/completed unbilled appointment for this patient
+    // Auto-detect appointment if not explicitly passed: find active/completed unbilled consultation appointment for this patient
     let targetAppointmentId = data.appointmentId || null;
     if (!targetAppointmentId) {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const todayEnd = new Date();
-      todayEnd.setHours(23, 59, 59, 999);
-
       const unbilledApt = await prisma.appointment.findFirst({
         where: {
           patientId: data.patientId,
-          appointmentDate: { gte: todayStart, lte: todayEnd },
-          status: { not: AppointmentStatus.CANCELLED },
+          status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS, AppointmentStatus.CONFIRMED] },
           visitType: { not: VisitType.PROCEDURE },
           consultationBill: null,
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { appointmentDate: 'desc' },
       });
       if (unbilledApt) {
         targetAppointmentId = unbilledApt.id;
@@ -143,6 +137,16 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
           data: { status: AppointmentStatus.COMPLETED },
         });
       }
+
+      // Also ensure any active/scheduled consultation appointments for this patient are marked COMPLETED
+      await tx.appointment.updateMany({
+        where: {
+          patientId: data.patientId,
+          status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS] },
+          visitType: { not: VisitType.PROCEDURE },
+        },
+        data: { status: AppointmentStatus.COMPLETED },
+      });
 
       // Record payment receipt if paidAmount > 0
       let paymentRecord = null;

@@ -365,6 +365,26 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
     }
   };
 
+  const handleShareConsultationWhatsApp = (bill: any) => {
+    let mobile = bill.patient?.mobile;
+    if (!mobile) {
+      mobile = prompt('Patient has no saved mobile. Enter 10-digit WhatsApp number to send invoice:', '');
+      if (!mobile) return;
+    }
+    const msg = createConsultationBillMessage(bill);
+    sendWhatsAppMessage(mobile, msg);
+  };
+
+  const handleShareProcedureWhatsApp = (opBill: any) => {
+    let mobile = opBill.procedure?.patient?.mobile;
+    if (!mobile) {
+      mobile = prompt('Patient has no saved mobile. Enter 10-digit WhatsApp number to send procedure invoice:', '');
+      if (!mobile) return;
+    }
+    const msg = createProcedureBillMessage(opBill);
+    sendWhatsAppMessage(mobile, msg);
+  };
+
   return (
     <div className="space-y-5">
       {/* Sub Tabs: Consultation Invoices vs. Procedure Invoices */}
@@ -490,10 +510,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
                       <td className="p-3 pr-5 text-right space-x-1.5">
                         {/* WhatsApp Share Button */}
                         <button
-                          onClick={() => {
-                            const msg = createConsultationBillMessage(bill);
-                            sendWhatsAppMessage(bill.patient.mobile, msg);
-                          }}
+                          onClick={() => handleShareConsultationWhatsApp(bill)}
                           className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded font-bold text-[11px] transition inline-flex items-center gap-1 cursor-pointer"
                           title="Send Invoice to Patient via WhatsApp"
                         >
@@ -725,10 +742,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
                         <td className="p-3 pr-5 text-right space-x-1.5">
                           {/* WhatsApp Share Button */}
                           <button
-                            onClick={() => {
-                              const msg = createProcedureBillMessage(opBill);
-                              sendWhatsAppMessage(opBill.procedure?.patient?.mobile || '', msg);
-                            }}
+                            onClick={() => handleShareProcedureWhatsApp(opBill)}
                             className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded font-bold text-[11px] transition inline-flex items-center gap-1 cursor-pointer"
                             title="Send Procedure Invoice to Patient via WhatsApp"
                           >

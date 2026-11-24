@@ -20,8 +20,10 @@ export const ReceiveShipmentModal: React.FC<ReceiveShipmentModalProps> = ({
   const [expiry, setExpiry] = useState('');
   const [qty, setQty] = useState<number>(50);
   const [purchasePrice, setPurchasePrice] = useState<number>(0);
+  const [purchaseGst, setPurchaseGst] = useState<number>(12);
   const [mrp, setMrp] = useState<number>(0);
   const [sellingPrice, setSellingPrice] = useState<number>(0);
+  const [sellingGst, setSellingGst] = useState<number>(12);
   const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -38,8 +40,10 @@ export const ReceiveShipmentModal: React.FC<ReceiveShipmentModalProps> = ({
 
       const latestBatch = medicine.batches?.[0];
       setPurchasePrice(latestBatch?.purchasePrice || 0);
+      setPurchaseGst(latestBatch?.gstRate || medicine.gstRate || 12);
       setMrp(latestBatch?.mrp || latestBatch?.sellingPrice || 0);
       setSellingPrice(latestBatch?.sellingPrice || latestBatch?.mrp || 0);
+      setSellingGst(latestBatch?.gstRate || medicine.gstRate || 12);
       setSuccessMsg('');
       setErrorMsg('');
     }
@@ -54,6 +58,11 @@ export const ReceiveShipmentModal: React.FC<ReceiveShipmentModalProps> = ({
       return;
     }
 
+    if (mrp > 0 && sellingPrice > mrp) {
+      setErrorMsg(`Selling Rate (₹${sellingPrice}) cannot exceed printed MRP (₹${mrp})`);
+      return;
+    }
+
     setLoading(true);
     setErrorMsg('');
     try {
@@ -64,6 +73,7 @@ export const ReceiveShipmentModal: React.FC<ReceiveShipmentModalProps> = ({
         purchasePrice,
         mrp,
         sellingPrice,
+        gstRate: sellingGst,
       });
 
       if (res.data.success) {
@@ -184,32 +194,100 @@ export const ReceiveShipmentModal: React.FC<ReceiveShipmentModalProps> = ({
                 step="0.01"
                 value={purchasePrice}
                 onChange={(e) => setPurchasePrice(parseFloat(e.target.value) || 0)}
-                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold"
+                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-[#0A685D]"
+                placeholder="0.00"
               />
+              <div className="mt-1 flex items-center gap-1">
+                <span className="text-[9px] text-slate-400">GST:</span>
+                {[0, 5, 12, 18, 28].map((rate) => (
+                  <button
+                    key={`buy-gst-${rate}`}
+                    type="button"
+                    onClick={() => setPurchaseGst(rate)}
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold cursor-pointer transition ${
+                      purchaseGst === rate
+                        ? 'bg-slate-700 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {rate}%
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div>
-              <label className="block font-bold text-slate-600 text-[10px] mb-1">MRP (₹)</label>
+              <label className="block font-bold text-slate-600 text-[10px] mb-1">PRINTED MRP (₹) *</label>
               <input
                 type="number"
                 step="0.01"
+                required
                 value={mrp}
                 onChange={(e) => setMrp(parseFloat(e.target.value) || 0)}
-                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold"
+                className="w-full px-2.5 py-1.5 bg-amber-50/60 border border-amber-200 rounded-xl text-xs font-black text-amber-900 focus:ring-2 focus:ring-amber-500"
+                placeholder="0.00"
               />
+              <span className="block text-[9px] text-amber-600 font-semibold mt-1">Maximum Retail Price</span>
             </div>
 
             <div>
-              <label className="block font-bold text-slate-600 text-[10px] mb-1">SELLING RATE (₹)</label>
+              <label className="block font-bold text-slate-600 text-[10px] mb-1">SELLING RATE (₹) *</label>
               <input
                 type="number"
                 step="0.01"
+                required
                 value={sellingPrice}
                 onChange={(e) => setSellingPrice(parseFloat(e.target.value) || 0)}
-                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-[#0A685D]"
+                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 text-[#0A685D] rounded-xl text-xs font-bold focus:ring-2 focus:ring-[#0A685D]"
+                placeholder="0.00"
               />
+              <div className="mt-1 flex items-center gap-1">
+                <span className="text-[9px] text-slate-400">GST:</span>
+                {[0, 5, 12, 18, 28].map((rate) => (
+                  <button
+                    key={`sell-gst-${rate}`}
+                    type="button"
+                    onClick={() => setSellingGst(rate)}
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold cursor-pointer transition ${
+                      sellingGst === rate
+                        ? 'bg-[#0A685D] text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {rate}%
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
+
+          {/* Real-time Selling Price + Tax Breakdown */}
+          {(sellingPrice > 0 || mrp > 0) && (
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <div>
+                  <span className="text-[10px] text-slate-500 font-bold uppercase block">Selling Base</span>
+                  <span className="font-extrabold text-slate-800">₹{sellingPrice.toFixed(2)}</span>
+                </div>
+                <div className="text-center">
+                  <span className="text-[10px] text-slate-500 font-bold uppercase block">+ Sale GST ({sellingGst}%)</span>
+                  <span className="font-bold text-teal-700">
+                    +₹{((sellingPrice * sellingGst) / 100).toFixed(2)}
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-slate-500 font-bold uppercase block">= Patient Selling Rate</span>
+                  <span className="font-black text-emerald-700 text-sm">
+                    ₹{(sellingPrice * (1 + sellingGst / 100)).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+              <div className="text-[10px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-200">
+                <span>Printed Pack MRP: <strong>₹{mrp.toFixed(2)}</strong></span>
+                <span className="text-emerald-700 font-semibold">✓ Automatically auto-calculates in POS cart</span>
+              </div>
+            </div>
+          )}
 
           <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
             <button

@@ -145,12 +145,9 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
     }
 
     const chosenBatch = validBatches[0];
-    const rawMrp = Number(chosenBatch?.mrp || (med as any).mrp || chosenBatch?.sellingPrice || 0);
-    const taxRate = Number(chosenBatch?.gstRate ?? (med as any).gstRate ?? 12);
-    const basePrice = chosenBatch?.sellingPrice && chosenBatch.sellingPrice < rawMrp
-      ? chosenBatch.sellingPrice
-      : (taxRate > 0 ? Math.round((rawMrp / (1 + taxRate / 100)) * 100) / 100 : rawMrp);
-    const mrp = rawMrp > 0 ? rawMrp : Math.round((basePrice * (1 + taxRate / 100)) * 100) / 100;
+    const unitPrice = Number(chosenBatch?.sellingPrice || chosenBatch?.mrp || (med as any).sellingPrice || (med as any).mrp || 0);
+    const taxRate = Number(chosenBatch?.gstRate !== undefined ? chosenBatch.gstRate : (med.gstRate || 12));
+    const itemMrp = Number(chosenBatch?.mrp || chosenBatch?.sellingPrice || unitPrice);
 
     const existingIdx = invoiceItems.findIndex(
       (it) => it.medicineId === med.id && it.selectedBatchId === chosenBatch?.id
@@ -164,12 +161,14 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
       }
       const updated = [...invoiceItems];
       updated[existingIdx].quantity += 1;
-      const itemMrp = updated[existingIdx].mrp || updated[existingIdx].unitPrice;
-      const sub = updated[existingIdx].quantity * itemMrp;
+      const sub = updated[existingIdx].quantity * updated[existingIdx].unitPrice;
       const disc = (sub * updated[existingIdx].discount) / 100;
-      updated[existingIdx].total = Math.round((sub - disc) * 100) / 100;
+      const taxable = sub - disc;
+      const taxAmt = (taxable * (updated[existingIdx].taxRate || 0)) / 100;
+      updated[existingIdx].total = Math.round((taxable + taxAmt) * 100) / 100;
       setInvoiceItems(updated);
     } else {
+      const lineTax = (unitPrice * taxRate) / 100;
       const newItem: InvoiceItem = {
         id: `item-${Date.now()}-${Math.random()}`,
         medicineId: med.id,
@@ -180,11 +179,11 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
         batchExpiry: chosenBatch ? chosenBatch.expiryDate : '',
         availableQty: chosenBatch ? chosenBatch.quantityInBase : med.currentStock,
         quantity: 1,
-        unitPrice: basePrice,
-        mrp,
+        unitPrice,
+        mrp: itemMrp,
         discount: 0,
         taxRate,
-        total: mrp,
+        total: Math.round((unitPrice + lineTax) * 100) / 100,
         allBatches: med.batches,
       };
       setInvoiceItems((prev) => [newItem, ...prev]);
@@ -207,10 +206,11 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
       return;
     }
     target.quantity = newQty;
-    const itemMrp = target.mrp || target.unitPrice;
-    const sub = target.quantity * itemMrp;
+    const sub = target.quantity * target.unitPrice;
     const disc = (sub * target.discount) / 100;
-    target.total = Math.round((sub - disc) * 100) / 100;
+    const taxable = sub - disc;
+    const taxAmt = (taxable * (target.taxRate || 0)) / 100;
+    target.total = Math.round((taxable + taxAmt) * 100) / 100;
     setInvoiceItems(updated);
   };
 
@@ -227,26 +227,24 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
         );
         return;
       }
-      const rawMrp = Number(selected.mrp || target.mrp || selected.sellingPrice || 0);
-      const taxRate = Number(selected.gstRate ?? target.taxRate ?? 12);
-      const basePrice = selected.sellingPrice && selected.sellingPrice < rawMrp
-        ? selected.sellingPrice
-        : (taxRate > 0 ? Math.round((rawMrp / (1 + taxRate / 100)) * 100) / 100 : rawMrp);
-      const mrp = rawMrp > 0 ? rawMrp : Math.round((basePrice * (1 + taxRate / 100)) * 100) / 100;
+      const unitPrice = Number(selected.sellingPrice || selected.mrp || target.unitPrice || 0);
+      const taxRate = Number(selected.gstRate !== undefined ? selected.gstRate : target.taxRate);
 
       target.selectedBatchId = selected.id;
       target.selectedBatchNo = selected.batchNumber;
       target.batchExpiry = selected.expiryDate;
       target.availableQty = selected.quantityInBase;
-      target.unitPrice = basePrice;
-      target.mrp = mrp;
+      target.unitPrice = unitPrice;
+      target.mrp = Number(selected.mrp || unitPrice);
       target.taxRate = taxRate;
       if (target.quantity > selected.quantityInBase) {
         target.quantity = Math.max(1, selected.quantityInBase);
       }
-      const sub = target.quantity * mrp;
+      const sub = target.quantity * unitPrice;
       const disc = (sub * target.discount) / 100;
-      target.total = Math.round((sub - disc) * 100) / 100;
+      const taxable = sub - disc;
+      const taxAmt = (taxable * taxRate) / 100;
+      target.total = Math.round((taxable + taxAmt) * 100) / 100;
       setInvoiceItems(updated);
     }
   };
@@ -265,25 +263,25 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
     }
   };
 
-  // Totals
-  const cartMrpSubtotal = invoiceItems.reduce((acc, it) => acc + (it.mrp || it.unitPrice) * it.quantity, 0);
+  // Totals: Base Subtotal, Item Discounts, Auto-Calculated GST Tax, Overall Discount, Grand Total
+  const cartSubtotal = invoiceItems.reduce((acc, it) => acc + (it.unitPrice * it.quantity), 0);
   const cartItemDiscountTotal = invoiceItems.reduce(
-    (acc, it) => acc + (((it.mrp || it.unitPrice) * it.quantity * it.discount) / 100),
+    (acc, it) => acc + (((it.unitPrice * it.quantity) * it.discount) / 100),
     0
   );
-  const overallDiscountAmount = ((cartMrpSubtotal - cartItemDiscountTotal) * overallDiscount) / 100;
+  const taxableSubtotal = cartSubtotal - cartItemDiscountTotal;
+  const overallDiscountAmount = (taxableSubtotal * overallDiscount) / 100;
   const finalDiscountAmount = Math.round((cartItemDiscountTotal + overallDiscountAmount) * 100) / 100;
-  const grandTotal = Math.max(0, Math.round(cartMrpSubtotal - finalDiscountAmount));
 
-  // Taxable base and GST breakdown
-  const taxableBaseAmount = invoiceItems.reduce((acc, it) => {
-    const rate = it.taxRate || 12;
-    const lineMrpPayable = (it.mrp || it.unitPrice) * it.quantity * (1 - it.discount / 100);
-    const base = rate > 0 ? lineMrpPayable / (1 + rate / 100) : lineMrpPayable;
-    return acc + base;
-  }, 0);
-  const totalTaxAmount = Math.max(0, Math.round((grandTotal - (taxableBaseAmount * (1 - overallDiscount / 100))) * 100) / 100);
-  const subTotalAmount = Math.round((grandTotal - totalTaxAmount) * 100) / 100;
+  // Auto-calculated GST tax across all cart items
+  const totalTaxAmount = Math.round(
+    invoiceItems.reduce((acc, it) => {
+      const lineTaxable = (it.unitPrice * it.quantity) - (((it.unitPrice * it.quantity) * it.discount) / 100);
+      return acc + (lineTaxable * (it.taxRate || 0)) / 100;
+    }, 0) * 100
+  ) / 100;
+
+  const grandTotal = Math.max(0, Math.round((taxableSubtotal - overallDiscountAmount + totalTaxAmount) * 100) / 100);
 
   // Keep single pay mode synchronized
   useEffect(() => {
@@ -308,15 +306,12 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
       return;
     }
 
-    // Safety Validation: Reject checkout if any expired batch is in cart
     const expiredItem = invoiceItems.find(
       (it) => it.batchExpiry && new Date(it.batchExpiry).getTime() < Date.now()
     );
     if (expiredItem) {
       setInvoiceError(
-        `DISPENSE BLOCKED: "${expiredItem.medicineName}" (Batch ${expiredItem.selectedBatchNo}) has EXPIRED on ${new Date(
-          expiredItem.batchExpiry
-        ).toLocaleDateString()}! Please remove expired items before billing.`
+        `DISPENSE BLOCKED: "${expiredItem.medicineName}" (Batch ${expiredItem.selectedBatchNo}) has EXPIRED!`
       );
       return;
     }
@@ -344,16 +339,16 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
       else if (paymentMode === 'Split') mappedPaymentMode = 'CASH';
 
       const itemsPayload = invoiceItems.map((it) => {
-        const itemGrossBase = it.unitPrice * it.quantity;
-        const discRs = (itemGrossBase * it.discount) / 100;
+        const itemGross = it.unitPrice * it.quantity;
+        const discRs = (itemGross * it.discount) / 100;
         return {
           medicineId: it.medicineId,
           batchStockId: it.selectedBatchId,
           quantity: it.quantity,
           unitPrice: it.unitPrice,
           discount: Math.round(discRs * 100) / 100,
-          gstRate: it.taxRate ?? 12,
-          taxRate: it.taxRate ?? 12,
+          gstRate: it.taxRate || 0,
+          taxRate: it.taxRate || 0,
         };
       });
 
@@ -364,9 +359,9 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
         customerAge: customerMode === 'walkin' ? (walkinAge.trim() || undefined) : undefined,
         doctorId: selectedDoctorId || undefined,
         saleDate: invoiceDate,
-        subTotal: subTotalAmount,
+        subTotal: Math.round(taxableSubtotal * 100) / 100,
         discount: finalDiscountAmount,
-        taxAmount: totalTaxAmount,
+        totalGst: totalTaxAmount,
         grandTotal,
         paymentMode: mappedPaymentMode,
         paidAmount: grandTotal,
@@ -681,9 +676,9 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
                 <tr>
                   <th className="p-3 pl-4">Medicine &amp; Batch</th>
                   <th className="p-3 text-center w-24">Qty</th>
-                  <th className="p-3 text-right">MRP (Incl.)</th>
-                  <th className="p-3 text-right">Base Price</th>
-                  <th className="p-3 text-right">GST Tax</th>
+                  <th className="p-3 text-right">Sale Price (₹)</th>
+                  <th className="p-3 text-right">Sale Tax</th>
+                  <th className="p-3 text-right">Final Rate / Unit</th>
                   <th className="p-3 text-right w-20">Disc %</th>
                   <th className="p-3 text-right">Total (₹)</th>
                   <th className="p-3 text-center w-10"></th>
@@ -706,9 +701,11 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
                   </tr>
                 ) : (
                   invoiceItems.map((item, idx) => {
-                    const itemMrp = item.mrp || item.unitPrice;
-                    const taxPerUnit = Math.max(0, itemMrp - item.unitPrice);
-                    const totalTaxForItem = Math.round(taxPerUnit * item.quantity * (1 - item.discount / 100) * 100) / 100;
+                    const lineGross = item.unitPrice * item.quantity;
+                    const lineDisc = (lineGross * item.discount) / 100;
+                    const lineTaxable = lineGross - lineDisc;
+                    const lineTaxAmt = (lineTaxable * (item.taxRate || 0)) / 100;
+                    const unitFinalRate = item.unitPrice * (1 + (item.taxRate || 0) / 100);
 
                     return (
                       <tr key={item.id} className="hover:bg-slate-50/70 transition">
@@ -765,24 +762,21 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
                           </div>
                         </td>
 
-                        {/* MRP per unit (Tax Inclusive) */}
-                        <td className="p-3 text-right font-black text-slate-900">
-                          ₹{itemMrp.toFixed(2)}
-                        </td>
-
-                        {/* Base Price per unit (Excl. Tax) */}
-                        <td className="p-3 text-right font-medium text-slate-600">
+                        {/* Price per unit */}
+                        <td className="p-3 text-right font-black text-slate-800">
                           ₹{item.unitPrice.toFixed(2)}
                         </td>
 
-                        {/* GST Tax info */}
+                        {/* GST Tax Column */}
                         <td className="p-3 text-right">
-                          <div className="font-semibold text-xs text-sky-800">
-                            ₹{totalTaxForItem.toFixed(2)}
-                          </div>
-                          <div className="text-[9px] text-slate-400">
-                            ({item.taxRate}% GST)
-                          </div>
+                          <span className="text-[10px] font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200 font-mono">
+                            {item.taxRate}%
+                          </span>
+                        </td>
+
+                        {/* Final Rate per Unit */}
+                        <td className="p-3 text-right font-black text-[#0A685D] font-mono">
+                          ₹{unitFinalRate.toFixed(2)}
                         </td>
 
                         {/* Discount */}
@@ -797,10 +791,11 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
                                 const val = parseFloat(e.target.value) || 0;
                                 const updated = [...invoiceItems];
                                 updated[idx].discount = Math.min(100, Math.max(0, val));
-                                const curMrp = updated[idx].mrp || updated[idx].unitPrice;
-                                const sub = updated[idx].quantity * curMrp;
+                                const sub = updated[idx].quantity * updated[idx].unitPrice;
                                 const disc = (sub * updated[idx].discount) / 100;
-                                updated[idx].total = Math.round((sub - disc) * 100) / 100;
+                                const taxable = sub - disc;
+                                const taxAmt = (taxable * (updated[idx].taxRate || 0)) / 100;
+                                updated[idx].total = Math.round((taxable + taxAmt) * 100) / 100;
                                 setInvoiceItems(updated);
                               }}
                               className="w-12 px-1.5 py-0.5 text-right bg-slate-50 border border-slate-200 rounded-md font-bold text-xs"
@@ -880,27 +875,30 @@ export const BillingDeskModule: React.FC<BillingDeskModuleProps> = ({
 
             <div className="flex flex-wrap items-center justify-between gap-4 pt-1">
               <div className="space-y-0.5">
-                <div className="text-[11px] text-slate-600 flex items-center gap-2">
-                  <span>Gross MRP: <strong>₹{cartMrpSubtotal.toFixed(2)}</strong></span>
+                <div className="text-[11px] text-slate-600 flex items-center gap-2 flex-wrap">
+                  <span>Base Subtotal: <strong>₹{cartSubtotal.toFixed(2)}</strong></span>
                   <span>•</span>
-                  <span>Taxable Base: <strong>₹{subTotalAmount.toFixed(2)}</strong></span>
-                  <span>•</span>
-                  <span className="text-sky-700 font-bold">GST Tax: +₹{totalTaxAmount.toFixed(2)}</span>
+                  <span className="text-teal-700 font-semibold">
+                    GST Tax: +₹{totalTaxAmount.toFixed(2)}
+                  </span>
+                  {finalDiscountAmount > 0 && (
+                    <>
+                      <span>•</span>
+                      <span className="text-rose-600 font-semibold">
+                        Discount: -₹{finalDiscountAmount.toFixed(2)} ({overallDiscount}%)
+                      </span>
+                    </>
+                  )}
                 </div>
-                {finalDiscountAmount > 0 && (
-                  <div className="text-[10px] text-rose-600 font-semibold">
-                    Discount Applied: -₹{finalDiscountAmount.toFixed(2)} ({overallDiscount}% overall)
-                  </div>
-                )}
-                <div className="text-[10px] text-slate-400">
-                  Customer pays Final MRP inclusive of all applicable GST taxes.
+                <div className="text-[10px] text-emerald-700 font-bold">
+                  ✓ Full settlement: Total paid matches payable amount (Outstanding: ₹0)
                 </div>
               </div>
               <div className="text-right">
                 <span className="text-[10px] uppercase font-black tracking-wider text-slate-500 block">
-                  Grand Total (MRP Payable)
+                  Total Payable
                 </span>
-                <span className="text-2xl font-black text-emerald-700">₹{grandTotal}</span>
+                <span className="text-2xl font-black text-emerald-700">₹{grandTotal.toFixed(2)}</span>
               </div>
             </div>
           </div>

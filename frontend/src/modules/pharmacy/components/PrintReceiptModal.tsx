@@ -127,6 +127,12 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({ receipt, o
               <span className="text-slate-500">Subtotal:</span>
               <span className="font-bold">₹{receipt.subTotal?.toFixed(2) || receipt.grandTotal}</span>
             </div>
+            {receipt.totalGst > 0 && (
+              <div className="flex justify-between text-teal-700">
+                <span>GST Tax:</span>
+                <span>+₹{receipt.totalGst.toFixed(2)}</span>
+              </div>
+            )}
             {receipt.discount > 0 && (
               <div className="flex justify-between text-rose-600">
                 <span>Discount:</span>

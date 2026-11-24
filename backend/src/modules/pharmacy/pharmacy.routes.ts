@@ -288,7 +288,7 @@ router.post('/medicines/bulk-import', authenticateToken, async (req: Request, re
 router.post('/medicines/:id/batches', authenticateToken, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { batchNumber, expiryDate, quantityUnits, purchasePrice, mrp, sellingPrice } = req.body;
+    const { batchNumber, expiryDate, quantityUnits, purchasePrice, mrp, sellingPrice, gstRate } = req.body;
 
     if (!batchNumber || !quantityUnits || Number(quantityUnits) <= 0) {
       return res.status(400).json({ success: false, message: 'Batch number and quantity are required' });
@@ -304,6 +304,14 @@ router.post('/medicines/:id/batches', authenticateToken, async (req: Request, re
     const bPrice = Number(purchasePrice) || 0;
     const mPrice = Number(mrp) || Number(sellingPrice) || 0;
     const sPrice = Number(sellingPrice) || Number(mrp) || 0;
+    const taxRate = gstRate !== undefined ? Number(gstRate) : (medicine.gstRate || 12.0);
+
+    if (mPrice > 0 && sPrice > mPrice) {
+      return res.status(400).json({
+        success: false,
+        message: `Selling price (₹${sPrice}) cannot exceed printed MRP (₹${mPrice})`,
+      });
+    }
 
     const batch = await prisma.$transaction(async (tx) => {
       const createdBatch = await tx.medicineBatchStock.create({
@@ -315,6 +323,14 @@ router.post('/medicines/:id/batches', authenticateToken, async (req: Request, re
           purchasePrice: bPrice,
           mrp: mPrice,
           sellingPrice: sPrice,
+          gstRate: taxRate,
+        },
+      });
+
+      await tx.medicineMaster.update({
+        where: { id },
+        data: {
+          gstRate: taxRate,
         },
       });
 
@@ -576,10 +592,7 @@ const pharmacySaleSchema = z.object({
       discount: z.number().min(0).default(0),
       gstRate: z.number().min(0).default(12),
       taxRate: z.number().min(0).optional(),
-    }).transform((item) => ({
-      ...item,
-      gstRate: item.gstRate !== undefined ? item.gstRate : (item.taxRate !== undefined ? item.taxRate : 12),
-    }))
+    })
   ).min(1, 'At least one medicine item is required'),
 });
 
@@ -616,15 +629,20 @@ router.post('/sales', authenticateToken, async (req: Request, res: Response) => 
           );
         }
 
-        const lineGross = item.quantity * item.unitPrice - item.discount;
-        const lineGst = (lineGross * item.gstRate) / 100;
+        const lineGross = Math.max(0, item.quantity * item.unitPrice - (item.discount || 0));
+        const itemTaxRate = item.taxRate !== undefined ? item.taxRate : item.gstRate !== undefined ? item.gstRate : (batchStock.gstRate || 0);
+        const lineGst = Math.round((lineGross * (itemTaxRate / 100)) * 100) / 100;
         subTotal += lineGross;
         totalGst += lineGst;
       }
 
-      const grandTotal = Math.round((subTotal + totalGst - data.discount) * 100) / 100;
-      const paidAmount = Math.min(grandTotal, data.paidAmount);
-      const pendingBalance = Math.round((grandTotal - paidAmount) * 100) / 100;
+      const grandTotal = Math.max(0, Math.round((subTotal + totalGst - (data.discount || 0)) * 100) / 100);
+      let paidAmount = data.paidAmount !== undefined ? data.paidAmount : grandTotal;
+      // If paid amount covers the bill, ensure strictly 0 pending balance
+      if (paidAmount >= grandTotal || Math.abs(grandTotal - paidAmount) <= 1.0) {
+        paidAmount = grandTotal;
+      }
+      const pendingBalance = Math.max(0, Math.round((grandTotal - paidAmount) * 100) / 100);
       const paymentStatus = pendingBalance <= 0 ? PaymentStatus.PAID : paidAmount > 0 ? PaymentStatus.PARTIALLY_PAID : PaymentStatus.UNPAID;
 
       // 2. Create Sale Record
@@ -632,9 +650,9 @@ router.post('/sales', authenticateToken, async (req: Request, res: Response) => 
         data: {
           invoiceNumber,
           patientId: data.patientId || null,
-          subTotal,
-          discount: data.discount,
-          totalGst,
+          subTotal: Math.round(subTotal * 100) / 100,
+          discount: data.discount || 0,
+          totalGst: Math.round(totalGst * 100) / 100,
           grandTotal,
           paidAmount,
           pendingBalance,
@@ -644,8 +662,13 @@ router.post('/sales', authenticateToken, async (req: Request, res: Response) => 
 
       // 3. Deduct stock and record items
       for (const item of data.items) {
-        const lineGross = item.quantity * item.unitPrice - item.discount;
-        const lineTotal = lineGross + (lineGross * item.gstRate) / 100;
+        const batchStock = await tx.medicineBatchStock.findUnique({
+          where: { id: item.batchStockId },
+        });
+        const lineGross = Math.max(0, item.quantity * item.unitPrice - (item.discount || 0));
+        const itemTaxRate = item.taxRate !== undefined ? item.taxRate : item.gstRate !== undefined ? item.gstRate : (batchStock?.gstRate || 0);
+        const lineGst = Math.round((lineGross * (itemTaxRate / 100)) * 100) / 100;
+        const lineTotal = Math.round((lineGross + lineGst) * 100) / 100;
 
         const updatedBatch = await tx.medicineBatchStock.update({
           where: { id: item.batchStockId },
@@ -662,7 +685,7 @@ router.post('/sales', authenticateToken, async (req: Request, res: Response) => 
             quantity: item.quantity,
             unitPrice: item.unitPrice,
             discount: item.discount,
-            gstRate: item.gstRate,
+            gstRate: itemTaxRate,
             totalAmount: lineTotal,
           },
         });

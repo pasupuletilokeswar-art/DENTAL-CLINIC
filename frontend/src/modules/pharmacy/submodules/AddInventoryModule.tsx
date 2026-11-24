@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Package, Calculator, FileSpreadsheet, Download, Save, RefreshCw } from 'lucide-react';
+import { Package, FileSpreadsheet, Download, Save, RefreshCw } from 'lucide-react';
 import api from '../../../services/api';
 
 interface AddInventoryModuleProps {
@@ -44,8 +44,6 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
     prescriptionType: 'OTC',
   });
 
-  const [calcMrp, setCalcMrp] = useState<number>(0);
-  const [calcTax, setCalcTax] = useState<number>(12);
   const [saving, setSaving] = useState(false);
 
   // Helper to extract numeric tax percent
@@ -53,64 +51,17 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
     return parseFloat(String(taxStr).replace(/[^0-9.]/g, '')) || 0;
   };
 
-  // Auto-calculate Base Price Before Tax when MRP changes
+  // Independent inputs - NO reverse calculation overwriting other fields!
   const handleMrpChange = (newMrp: number) => {
-    const taxRate = getTaxRate(invForm.sellingTax);
-    const priceBefore = taxRate > 0 ? Math.round((newMrp / (1 + taxRate / 100)) * 100) / 100 : newMrp;
-    setInvForm((prev) => ({
-      ...prev,
-      mrp: newMrp,
-      sellingPriceBeforeTax: priceBefore,
-    }));
-    setCalcMrp(newMrp);
+    setInvForm((prev) => ({ ...prev, mrp: newMrp }));
   };
 
-  // Auto-calculate Base Price Before Tax when Selling Tax changes
   const handleSellingTaxChange = (newTax: string) => {
-    const taxRate = getTaxRate(newTax);
-    const priceBefore = taxRate > 0 && invForm.mrp > 0
-      ? Math.round((invForm.mrp / (1 + taxRate / 100)) * 100) / 100
-      : (invForm.mrp || invForm.sellingPriceBeforeTax);
-    setInvForm((prev) => ({
-      ...prev,
-      sellingTax: newTax,
-      sellingPriceBeforeTax: priceBefore,
-    }));
-    setCalcTax(taxRate);
+    setInvForm((prev) => ({ ...prev, sellingTax: newTax }));
   };
 
-  // Auto-calculate MRP when Price Before Tax changes
   const handlePriceBeforeTaxChange = (newBase: number) => {
-    const taxRate = getTaxRate(invForm.sellingTax);
-    const calculatedMrp = taxRate > 0 ? Math.round((newBase * (1 + taxRate / 100)) * 100) / 100 : newBase;
-    setInvForm((prev) => ({
-      ...prev,
-      sellingPriceBeforeTax: newBase,
-      mrp: calculatedMrp,
-    }));
-    setCalcMrp(calculatedMrp);
-  };
-
-  // Side Calculator Handlers with live two-way sync
-  const handleCalcMrpChange = (val: number) => {
-    setCalcMrp(val);
-    const priceBefore = calcTax > 0 ? Math.round((val / (1 + calcTax / 100)) * 100) / 100 : val;
-    setInvForm((prev) => ({
-      ...prev,
-      mrp: val,
-      sellingPriceBeforeTax: priceBefore,
-      sellingTax: `${calcTax}% GST`,
-    }));
-  };
-
-  const handleCalcTaxChange = (taxVal: number) => {
-    setCalcTax(taxVal);
-    const priceBefore = taxVal > 0 && calcMrp > 0 ? Math.round((calcMrp / (1 + taxVal / 100)) * 100) / 100 : calcMrp;
-    setInvForm((prev) => ({
-      ...prev,
-      sellingTax: `${taxVal}% GST`,
-      sellingPriceBeforeTax: priceBefore,
-    }));
+    setInvForm((prev) => ({ ...prev, sellingPriceBeforeTax: newBase }));
   };
 
   const handleSaveInventory = async (e: React.FormEvent) => {
@@ -142,11 +93,9 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
         batchNumber: invForm.batchNumber.trim() || (invForm.openingStock > 0 ? `BATCH-${Date.now().toString().slice(-4)}` : undefined),
         expiryDate: invForm.expiryDate || undefined,
         buyingPrice: parseFloat(invForm.buyingPriceBeforeTax.toString()) || 0,
-        mrp: parseFloat(invForm.mrp.toString()) || parseFloat(invForm.sellingPriceBeforeTax.toString()) || 0,
-        sellingPrice: parseFloat(invForm.sellingPriceBeforeTax.toString()) || (invForm.mrp > 0 ? Math.round((invForm.mrp / (1 + parsedGst / 100)) * 100) / 100 : 0),
+        mrp: parseFloat(invForm.mrp.toString()) || 0,
+        sellingPrice: parseFloat(invForm.sellingPriceBeforeTax.toString()) || parseFloat(invForm.mrp.toString()) || 0,
         gstRate: parsedGst,
-        sellingTax: invForm.sellingTax,
-        buyingTax: invForm.buyingTax,
       };
 
       const res = await api.post('/pharmacy/medicines', payload);
@@ -186,6 +135,12 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
       setSaving(false);
     }
   };
+
+  const currentTaxRate = getTaxRate(invForm.sellingTax);
+  const calculatedTaxAmount = invForm.sellingPriceBeforeTax > 0 && currentTaxRate > 0
+    ? (invForm.sellingPriceBeforeTax * currentTaxRate) / 100
+    : 0;
+  const calculatedFinalSellingPrice = invForm.sellingPriceBeforeTax + calculatedTaxAmount;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -230,27 +185,18 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block font-bold text-slate-700 mb-1">ITEM CODE</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={invForm.itemCode}
-                  onChange={(e) => setInvForm({ ...invForm, itemCode: e.target.value })}
-                  placeholder="e.g. JOIN633"
-                  className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={() => setInvForm({ ...invForm, itemCode: '' })}
-                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold cursor-pointer"
-                >
-                  Clear
-                </button>
-              </div>
+              <label className="block font-bold text-slate-700 mb-1">ITEM CODE (OPTIONAL)</label>
+              <input
+                type="text"
+                value={invForm.itemCode}
+                onChange={(e) => setInvForm({ ...invForm, itemCode: e.target.value })}
+                placeholder="Auto-generated if empty"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+              />
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">STRENGTH</label>
+              <label className="block font-bold text-slate-700 mb-1">STRENGTH / DOSAGE</label>
               <input
                 type="text"
                 value={invForm.strength}
@@ -273,14 +219,32 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">BUYING PRICE BEFORE TAX (₹)</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-bold text-slate-700">BUYING PRICE BEFORE TAX (₹)</label>
+                <div className="flex items-center gap-1">
+                  {[0, 5, 12, 18, 28].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setInvForm({ ...invForm, buyingTax: `${t}% GST` })}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
+                        invForm.buyingTax === `${t}% GST` ? 'bg-[#0A685D] text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {t}%
+                    </button>
+                  ))}
+                </div>
+              </div>
               <input
                 type="number"
                 step="0.01"
-                value={invForm.buyingPriceBeforeTax}
+                min="0"
+                value={invForm.buyingPriceBeforeTax || ''}
                 onChange={(e) =>
                   setInvForm({ ...invForm, buyingPriceBeforeTax: parseFloat(e.target.value) || 0 })
                 }
+                placeholder="Purchase cost from supplier"
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
               />
             </div>
@@ -298,13 +262,18 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">BUYING TAX (%)</label>
+              <label className="block font-bold text-slate-700 mb-1">
+                PRINTED PACK MRP (₹) *
+              </label>
               <input
-                type="text"
-                value={invForm.buyingTax}
-                onChange={(e) => setInvForm({ ...invForm, buyingTax: e.target.value })}
-                placeholder="e.g. 12% GST or 12"
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs"
+                type="number"
+                step="0.01"
+                min="0"
+                required
+                value={invForm.mrp || ''}
+                onChange={(e) => handleMrpChange(parseFloat(e.target.value) || 0)}
+                placeholder="Printed maximum retail price"
+                className="w-full px-3 py-2 bg-amber-50/60 border border-amber-300 rounded-xl font-black text-sm text-amber-900 focus:border-amber-500"
               />
             </div>
           </div>
@@ -323,33 +292,58 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
 
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="block font-bold text-slate-700">SELLING TAX (%)</label>
+                <label className="block font-bold text-slate-700">SELLING PRICE (₹) *</label>
                 <div className="flex items-center gap-1">
-                  {['0', '5', '12', '18', '28'].map((rate) => (
+                  {[0, 5, 12, 18, 28].map((t) => (
                     <button
-                      key={rate}
+                      key={t}
                       type="button"
-                      onClick={() => handleSellingTaxChange(`${rate}% GST`)}
+                      onClick={() => handleSellingTaxChange(`${t}% GST`)}
                       className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
-                        invForm.sellingTax.includes(`${rate}%`) || invForm.sellingTax === rate
-                          ? 'bg-teal-700 text-white'
-                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                        invForm.sellingTax === `${t}% GST` ? 'bg-[#0A685D] text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                       }`}
                     >
-                      {rate}%
+                      {t}%
                     </button>
                   ))}
                 </div>
               </div>
               <input
-                type="text"
-                value={invForm.sellingTax}
-                onChange={(e) => handleSellingTaxChange(e.target.value)}
-                placeholder="e.g. 12% GST or 12"
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs"
+                type="number"
+                step="0.01"
+                min="0"
+                required
+                value={invForm.sellingPriceBeforeTax || ''}
+                onChange={(e) => handlePriceBeforeTaxChange(parseFloat(e.target.value) || 0)}
+                placeholder="Direct selling price (e.g. 160)"
+                className="w-full px-3 py-2 bg-emerald-50/60 border border-emerald-300 rounded-xl font-black text-sm text-emerald-900 focus:border-emerald-500"
               />
             </div>
           </div>
+
+          {/* Real-Time Selling Price + Tax Breakdown Card */}
+          {(invForm.sellingPriceBeforeTax > 0 || invForm.mrp > 0) && (
+            <div className="p-3 bg-gradient-to-r from-teal-50 to-emerald-50 border border-teal-200 rounded-2xl space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <div>
+                  <span className="text-[10px] text-slate-500 font-bold uppercase block">Entered Selling Price</span>
+                  <span className="font-extrabold text-slate-800">₹{invForm.sellingPriceBeforeTax.toFixed(2)}</span>
+                </div>
+                <div className="text-center">
+                  <span className="text-[10px] text-slate-500 font-bold uppercase block">+ Sale Tax ({currentTaxRate}%)</span>
+                  <span className="font-bold text-teal-700">+₹{calculatedTaxAmount.toFixed(2)}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-slate-500 font-bold uppercase block">= Final Rate (In Billing)</span>
+                  <span className="font-black text-emerald-700 text-sm">₹{calculatedFinalSellingPrice.toFixed(2)}</span>
+                </div>
+              </div>
+              <div className="text-[10px] text-slate-500 flex items-center justify-between pt-1 border-t border-teal-200/60">
+                <span>Printed Pack MRP: <strong>₹{invForm.mrp.toFixed(2)}</strong></span>
+                <span className="text-emerald-700 font-semibold">✓ Multiplies automatically by quantity during billing</span>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -363,26 +357,6 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">
-                MRP (₹) <span className="text-emerald-700 text-[10px] font-bold lowercase">(patient selling price, incl. tax) *</span>
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                value={invForm.mrp || ''}
-                onChange={(e) => handleMrpChange(parseFloat(e.target.value) || 0)}
-                placeholder="Enter Retail MRP (e.g. 100)"
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-black text-sm text-slate-900 focus:border-teal-500"
-              />
-              <span className="text-[10px] text-slate-400 mt-0.5 block">
-                Printed on medicine pack. Customer pays this final price inclusive of tax.
-              </span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
               <label className="block font-bold text-slate-700 mb-1">PACKAGE INFO</label>
               <input
                 type="text"
@@ -392,53 +366,7 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
               />
             </div>
-
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">
-                BASE PRICE BEFORE TAX (₹) <span className="text-teal-700 text-[10px] font-bold lowercase">(excl. tax)</span>
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                value={invForm.sellingPriceBeforeTax || ''}
-                onChange={(e) => handlePriceBeforeTaxChange(parseFloat(e.target.value) || 0)}
-                placeholder="Base price before GST"
-                className="w-full px-3 py-2 bg-slate-50 border border-teal-300 rounded-xl font-bold text-teal-800"
-              />
-              <span className="text-[10px] text-slate-400 mt-0.5 block">
-                Taxable value (MRP ÷ (1 + Tax%)). Auto-calculates bidirectional with MRP.
-              </span>
-            </div>
           </div>
-
-          {/* Real-time Tax & Price Calculation Breakdown Card */}
-          {(invForm.mrp > 0 || invForm.sellingPriceBeforeTax > 0) && (
-            <div className="p-3.5 bg-gradient-to-r from-teal-50 via-emerald-50 to-sky-50 border border-teal-200 rounded-xl space-y-2 animate-in fade-in">
-              <div className="flex items-center justify-between text-xs">
-                <div>
-                  <span className="text-slate-500 font-bold block text-[10px] uppercase">Base Price (Excl. Tax)</span>
-                  <span className="font-extrabold text-slate-800 text-sm">₹{invForm.sellingPriceBeforeTax.toFixed(2)}</span>
-                </div>
-                <div className="text-center">
-                  <span className="text-slate-500 font-bold block text-[10px] uppercase">
-                    + GST Tax ({invForm.sellingTax || '12%'})
-                  </span>
-                  <span className="font-extrabold text-sky-800 text-sm">
-                    +₹{Math.max(0, invForm.mrp - invForm.sellingPriceBeforeTax).toFixed(2)}
-                  </span>
-                </div>
-                <div className="text-right">
-                  <span className="text-slate-500 font-bold block text-[10px] uppercase">= Patient Selling Price (MRP)</span>
-                  <span className="font-black text-emerald-700 text-base">₹{invForm.mrp.toFixed(2)}</span>
-                </div>
-              </div>
-              <div className="text-[10px] text-slate-500 bg-white/70 p-1.5 rounded-lg border border-teal-100 flex items-center justify-between">
-                <span>Customer pays MRP: <strong>₹{invForm.mrp.toFixed(2)}</strong></span>
-                <span>Tax included: <strong>₹{Math.max(0, invForm.mrp - invForm.sellingPriceBeforeTax).toFixed(2)} ({invForm.sellingTax || '12%'})</strong></span>
-              </div>
-            </div>
-          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -557,86 +485,8 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
         </form>
       </div>
 
-      {/* Right Column: MRP Calculator & Smart CSV (4 Cols) */}
+      {/* Right Column: Smart CSV (4 Cols) */}
       <div className="lg:col-span-4 space-y-5">
-        {/* MRP Calculator */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-5 space-y-3">
-          <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-            <h4 className="text-xs font-black uppercase tracking-wider text-slate-900 flex items-center gap-2">
-              <Calculator className="w-4 h-4 text-[#0A685D]" />
-              MRP & Tax Calculator
-            </h4>
-            <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full">
-              Live Auto-Calc
-            </span>
-          </div>
-
-          <div>
-            <label className="block font-bold text-slate-600 text-xs mb-1">Enter MRP (₹)</label>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              value={calcMrp || ''}
-              onChange={(e) => handleCalcMrpChange(parseFloat(e.target.value) || 0)}
-              placeholder="e.g. 100"
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs focus:border-teal-500"
-            />
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block font-bold text-slate-600 text-xs">Tax Rate (%)</label>
-              <div className="flex items-center gap-1">
-                {[0, 5, 12, 18, 28].map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => handleCalcTaxChange(t)}
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
-                      calcTax === t ? 'bg-[#0A685D] text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                    }`}
-                  >
-                    {t}%
-                  </button>
-                ))}
-              </div>
-            </div>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              value={calcTax || ''}
-              onChange={(e) => handleCalcTaxChange(parseFloat(e.target.value) || 0)}
-              placeholder="e.g. 12"
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold"
-            />
-          </div>
-
-          <div className="pt-2 border-t border-slate-100 space-y-2">
-            <div className="flex justify-between items-center text-xs">
-              <span className="text-slate-500 font-medium">Base Price (Excl. Tax):</span>
-              <span className="font-mono font-bold text-slate-800 text-sm">
-                ₹{calcMrp > 0 ? (calcMrp / (1 + calcTax / 100)).toFixed(2) : '0.00'}
-              </span>
-            </div>
-            <div className="flex justify-between items-center text-xs">
-              <span className="text-slate-500 font-medium">GST Tax Amount ({calcTax}%):</span>
-              <span className="font-mono font-bold text-sky-800">
-                +₹{calcMrp > 0 ? (calcMrp - calcMrp / (1 + calcTax / 100)).toFixed(2) : '0.00'}
-              </span>
-            </div>
-            <div className="flex justify-between items-center text-xs font-black border-t border-dashed border-slate-200 pt-1.5">
-              <span className="text-slate-800">Final Patient MRP (Incl. Tax):</span>
-              <span className="font-mono text-emerald-700 text-base">₹{calcMrp.toFixed(2)}</span>
-            </div>
-          </div>
-
-          <div className="text-[11px] text-emerald-800 font-semibold bg-emerald-50 border border-emerald-200 rounded-xl p-2 text-center">
-            ✓ Auto-syncs live with inventory form
-          </div>
-        </div>
-
         {/* Smart CSV Import Card */}
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-5 space-y-3">
           <div className="flex items-center justify-between pb-2 border-b border-slate-100">
@@ -691,4 +541,3 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
     </div>
   );
 };
-
