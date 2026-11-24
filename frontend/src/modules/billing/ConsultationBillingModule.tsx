@@ -524,12 +524,37 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       {/* ========================================================================= */}
       {billingTab === 'consultation' && (
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-800">
-              Consultation Invoices ({filteredConsultationBills.length}
-              {invoiceSearchQuery ? ` of ${bills.length}` : ''})
-            </span>
-            <span className="text-[11px] text-slate-500">Includes partial collections & balances</span>
+          <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/50">
+            <div className="flex items-center gap-2">
+              <Receipt className="w-4 h-4 text-teal-600" />
+              <span className="text-xs font-bold text-slate-800">
+                Consultation Invoices ({filteredConsultationBills.length}
+                {invoiceSearchQuery ? ` of ${bills.length}` : ''})
+              </span>
+              <span className="text-[11px] text-slate-400 hidden md:inline">• Partial & Paid Records</span>
+            </div>
+
+            {/* In-Table Search Bar */}
+            <div className="relative w-full sm:w-80">
+              <Search className="w-4 h-4 text-teal-600 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={invoiceSearchQuery}
+                onChange={(e) => setInvoiceSearchQuery(e.target.value)}
+                placeholder="Search by invoice #, patient, phone..."
+                className="w-full pl-9 pr-8 py-1.5 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 shadow-2xs font-medium"
+              />
+              {invoiceSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setInvoiceSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs p-0.5 cursor-pointer"
+                  title="Clear Search"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           </div>
 
           {loading ? (
@@ -764,12 +789,37 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
 
           {/* Section 2B: Completed Procedure Invoices */}
           <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-800">
-                Completed Procedure Invoices ({filteredProcedureBills.length}
-                {invoiceSearchQuery ? ` of ${procedureBills.length}` : ''})
-              </span>
-              <span className="text-[11px] text-amber-700 font-semibold">Separate OT & Surgical Charges</span>
+            <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-amber-50/30">
+              <div className="flex items-center gap-2">
+                <Scissors className="w-4 h-4 text-amber-600" />
+                <span className="text-xs font-bold text-slate-800">
+                  Completed Procedure Invoices ({filteredProcedureBills.length}
+                  {invoiceSearchQuery ? ` of ${procedureBills.length}` : ''})
+                </span>
+                <span className="text-[11px] text-amber-700 font-semibold hidden md:inline">• OT & Surgical Charges</span>
+              </div>
+
+              {/* In-Table Search Bar */}
+              <div className="relative w-full sm:w-80">
+                <Search className="w-4 h-4 text-amber-600 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={invoiceSearchQuery}
+                  onChange={(e) => setInvoiceSearchQuery(e.target.value)}
+                  placeholder="Search by invoice #, patient, procedure..."
+                  className="w-full pl-9 pr-8 py-1.5 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-amber-500 shadow-2xs font-medium"
+                />
+                {invoiceSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setInvoiceSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs p-0.5 cursor-pointer"
+                    title="Clear Search"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
             </div>
 
             {loading ? (
