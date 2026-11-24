@@ -49,6 +49,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
   const [procedureBills, setProcedureBills] = useState<any[]>([]);
   const [doctors, setDoctors] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [invoiceSearchQuery, setInvoiceSearchQuery] = useState('');
 
   // New Consultation Invoice Modal
   const [showModal, setShowModal] = useState(false);
@@ -235,6 +236,39 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       socket.off('procedure:scheduled', handleBillUpdate);
     };
   }, []);
+
+  // Real-time Invoice Filtering across Consultation & Procedure Bills
+  const filteredConsultationBills = bills.filter((b) => {
+    if (!invoiceSearchQuery.trim()) return true;
+    const q = invoiceSearchQuery.toLowerCase().trim();
+    return (
+      b.invoiceNumber?.toLowerCase().includes(q) ||
+      b.patient?.name?.toLowerCase().includes(q) ||
+      b.patient?.patientCode?.toLowerCase().includes(q) ||
+      b.patient?.mobile?.includes(q) ||
+      b.doctor?.user?.fullName?.toLowerCase().includes(q) ||
+      b.doctor?.specialization?.toLowerCase().includes(q) ||
+      String(b.totalAmount).includes(q) ||
+      b.paymentStatus?.toLowerCase().includes(q)
+    );
+  });
+
+  const filteredProcedureBills = procedureBills.filter((op) => {
+    if (!invoiceSearchQuery.trim()) return true;
+    const q = invoiceSearchQuery.toLowerCase().trim();
+    const procName = op.procedure?.procedureMaster?.name || op.procedure?.procedureName || '';
+    return (
+      op.invoiceNumber?.toLowerCase().includes(q) ||
+      op.procedure?.procedureCode?.toLowerCase().includes(q) ||
+      op.procedure?.patient?.name?.toLowerCase().includes(q) ||
+      op.procedure?.patient?.patientCode?.toLowerCase().includes(q) ||
+      op.procedure?.patient?.mobile?.includes(q) ||
+      op.procedure?.dentistName?.toLowerCase().includes(q) ||
+      procName.toLowerCase().includes(q) ||
+      String(op.totalAmount).includes(q) ||
+      op.paymentStatus?.toLowerCase().includes(q)
+    );
+  });
 
   const calculateDiscountAmount = (fee: number, discVal: number, type: 'INR' | 'PERCENT') => {
     if (type === 'PERCENT') {
@@ -436,7 +470,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       </div>
 
       {/* Action Header */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
         <div>
           <h3 className="text-sm font-bold text-slate-800">
             {billingTab === 'consultation'
@@ -450,15 +484,39 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
           </p>
         </div>
 
-        {billingTab === 'consultation' && (
-          <button
-            onClick={() => setShowModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-semibold shadow-sm transition shrink-0 cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>New Consultation Invoice</span>
-          </button>
-        )}
+        <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
+          {/* SEARCH INVOICES BAR */}
+          <div className="relative flex-1 sm:w-72 min-w-[220px]">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={invoiceSearchQuery}
+              onChange={(e) => setInvoiceSearchQuery(e.target.value)}
+              placeholder="Search by Invoice #, Patient, Phone..."
+              className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
+            />
+            {invoiceSearchQuery && (
+              <button
+                type="button"
+                onClick={() => setInvoiceSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs p-0.5 cursor-pointer"
+                title="Clear Search"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
+          {billingTab === 'consultation' && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-semibold shadow-sm transition shrink-0 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>New Consultation Invoice</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ========================================================================= */}
@@ -467,7 +525,10 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
       {billingTab === 'consultation' && (
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-800">Consultation Invoices ({bills.length})</span>
+            <span className="text-xs font-bold text-slate-800">
+              Consultation Invoices ({filteredConsultationBills.length}
+              {invoiceSearchQuery ? ` of ${bills.length}` : ''})
+            </span>
             <span className="text-[11px] text-slate-500">Includes partial collections & balances</span>
           </div>
 
@@ -475,6 +536,16 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
             <div className="p-12 text-center text-xs text-slate-400">Loading invoices...</div>
           ) : bills.length === 0 ? (
             <div className="p-12 text-center text-xs text-slate-400">No consultation invoices generated yet.</div>
+          ) : filteredConsultationBills.length === 0 ? (
+            <div className="p-12 text-center text-xs text-slate-500">
+              No consultation invoices match "<span className="font-semibold text-slate-700">{invoiceSearchQuery}</span>".{' '}
+              <button
+                onClick={() => setInvoiceSearchQuery('')}
+                className="text-teal-600 font-bold hover:underline cursor-pointer ml-1"
+              >
+                Clear search
+              </button>
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -492,7 +563,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {bills.map((bill) => (
+                  {filteredConsultationBills.map((bill) => (
                     <tr key={bill.id} className="hover:bg-slate-50/60 transition">
                       <td className="p-3 pl-5 font-mono font-bold text-slate-900">{bill.invoiceNumber}</td>
                       <td className="p-3 text-slate-500">{new Date(bill.billDate).toLocaleDateString()}</td>
@@ -695,7 +766,8 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
           <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-800">
-                Completed Procedure Invoices ({procedureBills.length})
+                Completed Procedure Invoices ({filteredProcedureBills.length}
+                {invoiceSearchQuery ? ` of ${procedureBills.length}` : ''})
               </span>
               <span className="text-[11px] text-amber-700 font-semibold">Separate OT & Surgical Charges</span>
             </div>
@@ -705,6 +777,16 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
             ) : procedureBills.length === 0 ? (
               <div className="p-12 text-center text-xs text-slate-400">
                 No completed procedure invoices found yet.
+              </div>
+            ) : filteredProcedureBills.length === 0 ? (
+              <div className="p-12 text-center text-xs text-slate-500">
+                No procedure invoices match "<span className="font-semibold text-slate-700">{invoiceSearchQuery}</span>".{' '}
+                <button
+                  onClick={() => setInvoiceSearchQuery('')}
+                  className="text-amber-700 font-bold hover:underline cursor-pointer ml-1"
+                >
+                  Clear search
+                </button>
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -723,7 +805,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {procedureBills.map((opBill) => (
+                    {filteredProcedureBills.map((opBill) => (
                       <tr key={opBill.id} className="hover:bg-slate-50/60 transition">
                         <td className="p-3 pl-5 font-mono font-bold text-amber-900">{opBill.invoiceNumber}</td>
                         <td className="p-3 text-slate-500">{new Date(opBill.billDate).toLocaleDateString()}</td>
