@@ -1,16 +1,29 @@
-// Utility to format WhatsApp share links for clinical receipts and bills
+// Utility to format WhatsApp share links for clinical receipts, bills, and POs
+// Fully compliant with WhatsApp Web & Desktop for unsaved numbers
 
-export const sendWhatsAppMessage = (phone: string, message: string) => {
+export const formatWhatsAppPhone = (phone: string): string => {
+  if (!phone) return '';
   // Clean phone number: remove non-digits
   let cleanPhone = phone.replace(/\D/g, '');
+  // Strip any leading zeros
+  cleanPhone = cleanPhone.replace(/^0+/, '');
   if (cleanPhone.length === 10) {
     cleanPhone = `91${cleanPhone}`; // Default to Indian country code +91
   }
+  return cleanPhone;
+};
+
+export const sendWhatsAppMessage = (phone: string, message: string) => {
+  const cleanPhone = formatWhatsAppPhone(phone);
+  if (!cleanPhone || cleanPhone.length < 10) {
+    alert('Please enter a valid 10-digit mobile number for WhatsApp messaging.');
+    return;
+  }
   const encodedText = encodeURIComponent(message);
-  // Using api.whatsapp.com/send directly opens within the existing WhatsApp tab or client
-  // rather than forcing a heavy full web.whatsapp.com reload that triggers "WhatsApp is open in another window"
-  const url = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
-  const win = window.open(url, 'whatsapp_session');
+  // Using official api.whatsapp.com/send/?phone=... with type=phone_number ensures WhatsApp
+  // opens a direct chat with this phone number EVEN IF it is NOT saved in contacts.
+  const url = `https://api.whatsapp.com/send/?phone=${cleanPhone}&text=${encodedText}&type=phone_number&app_absent=0`;
+  const win = window.open(url, '_blank', 'noopener,noreferrer');
   if (win) {
     try {
       win.focus();

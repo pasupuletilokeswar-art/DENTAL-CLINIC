@@ -3,11 +3,12 @@ name: dental-clinic
 networks:
   clinic_network:
     name: clinic_network
-    driver: bridge
+    external: true
 
 volumes:
   clinic_pgdata:
     name: clinic_pgdata
+    external: true
 
 services:
   # ==============================================================
@@ -85,6 +86,8 @@ services:
         condition: service_healthy
     ports:
       - "${FRONTEND_PORT:-8080}:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost/health || exit 1"]
       interval: 10s

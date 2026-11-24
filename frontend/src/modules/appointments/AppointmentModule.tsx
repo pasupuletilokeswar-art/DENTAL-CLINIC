@@ -452,6 +452,8 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
     socket.on('appointment:rescheduled', handleRefresh);
     socket.on('billing:consultation-created', handleRefresh);
     socket.on('billing:payment-received', handleRefresh);
+    socket.on('procedure:completed', handleRefresh);
+    socket.on('operation:invoice-created', handleRefresh);
     socket.on('appointment:reminder_sent', () => {
       fetchAppointments();
       fetchTomorrowReminders();
@@ -463,6 +465,8 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
       socket.off('appointment:rescheduled', handleRefresh);
       socket.off('billing:consultation-created', handleRefresh);
       socket.off('billing:payment-received', handleRefresh);
+      socket.off('procedure:completed', handleRefresh);
+      socket.off('operation:invoice-created', handleRefresh);
       socket.off('appointment:reminder_sent');
     };
   }, [viewMode, selectedDate, doctorFilter, specializationFilter, showBookingModal, bookingData]);
@@ -1653,9 +1657,18 @@ We look forward to seeing you!`;
           /* MODERN COMPACT APPOINTMENT CARDS (REDUCED HEIGHT, RICH FLOW) */
           <div className="p-3 md:p-4 bg-slate-50/60 space-y-2.5">
             {filteredAppointments.map((apt) => {
-              const isBilled = !!apt.consultationBill;
-              const isBillPaid = isBilled && (apt.consultationBill?.paymentStatus === 'PAID' || (apt.consultationBill?.pendingBalance || 0) <= 0);
-              const isProcedureSlot = apt.visitType === 'PROCEDURE';
+              const isProcedureApt = apt.visitType === 'PROCEDURE';
+              const isProcedureSlot = isProcedureApt;
+              const aptDateStr = apt.appointmentDate ? String(apt.appointmentDate).substring(0, 10) : todayStr;
+              const isFutureApt = aptDateStr > todayStr;
+              const opBill = (apt as any).operationBill;
+              const isOpBilled = !!opBill;
+              const isOpPaid = isOpBilled && (opBill.paymentStatus === 'PAID' || (opBill.pendingBalance || 0) <= 0);
+
+              const isBilled = isProcedureApt ? isOpBilled : !!apt.consultationBill;
+              const isBillPaid = isProcedureApt
+                ? isOpPaid
+                : isBilled && (apt.consultationBill?.paymentStatus === 'PAID' || (apt.consultationBill?.pendingBalance || 0) <= 0);
 
               return (
                 <div
@@ -1763,21 +1776,25 @@ We look forward to seeing you!`;
 
                     {/* Right block: Billing Done badge + Status Badge */}
                     <div className="flex items-center gap-2 shrink-0">
-                      {/* If Consultation Completed and Billing Done (Only for non-procedure visits) */}
-                      {apt.status === 'COMPLETED' && !isProcedureSlot && (
+                      {/* If Completed and Billing Done */}
+                      {apt.status === 'COMPLETED' && (
                         isBillPaid ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300 font-black text-xs shadow-2xs">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>✓ Billing Done</span>
+                            <span>{isProcedureApt ? '✓ Procedure Billed' : '✓ Billing Done'}</span>
                           </span>
                         ) : isBilled ? (
                           <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-100 text-amber-800 border border-amber-300 font-bold text-xs shadow-2xs">
                             <Clock className="w-3.5 h-3.5 text-amber-600" />
-                            <span>Bill Pending (₹{apt.consultationBill?.pendingBalance})</span>
+                            <span>
+                              {isProcedureApt
+                                ? `Procedure Due (₹${opBill?.pendingBalance})`
+                                : `Bill Pending (₹${apt.consultationBill?.pendingBalance})`}
+                            </span>
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 text-xs font-semibold">
-                            <span>Unbilled</span>
+                            <span>{isProcedureApt ? 'Unbilled Procedure' : 'Unbilled'}</span>
                           </span>
                         )
                       )}
@@ -1797,12 +1814,12 @@ We look forward to seeing you!`;
                         {apt.status === 'COMPLETED' ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>{isProcedureSlot ? 'Procedure Done' : 'Consultation Done'}</span>
+                            <span>{isProcedureApt ? 'Procedure Completed' : 'Consultation Done'}</span>
                           </>
                         ) : apt.status === 'IN_PROGRESS' ? (
                           <>
                             <Activity className="w-3.5 h-3.5" />
-                            <span>In Chair</span>
+                            <span>{isProcedureApt ? 'In Procedure' : 'In Chair'}</span>
                           </>
                         ) : apt.status === 'CANCELLED' ? (
                           <>
@@ -1812,7 +1829,7 @@ We look forward to seeing you!`;
                         ) : (
                           <>
                             <Clock className="w-3.5 h-3.5" />
-                            <span>Scheduled</span>
+                            <span>{isProcedureApt ? 'Procedure Slot' : 'Scheduled'}</span>
                           </>
                         )}
                       </span>
@@ -1894,41 +1911,50 @@ We look forward to seeing you!`;
                             <span>Reschedule</span>
                           </button>
 
-                          <button
-                            onClick={() => handleStatusChange(apt.id, 'IN_PROGRESS')}
-                            className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
-                            title="Mark patient as In-Chair with doctor"
-                          >
-                            <span>Start</span>
-                          </button>
+                          {/* Strictly hide Start & Done & Bill for tomorrow / future appointments */}
+                          {!isFutureApt && (
+                            <>
+                              <button
+                                onClick={() => handleStatusChange(apt.id, 'IN_PROGRESS')}
+                                className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
+                                title="Mark patient as In-Chair with doctor"
+                              >
+                                <span>Start</span>
+                              </button>
 
-                          {onNavigateToNotes && (
-                            <button
-                              onClick={() => {
-                                handleStatusChange(apt.id, 'IN_PROGRESS');
-                                onNavigateToNotes(apt.patientId);
-                              }}
-                              title="Open doctor clinical notes & prescription"
-                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
-                            >
-                              <FileText className="w-3 h-3 text-indigo-600" />
-                              <span>Notes</span>
-                            </button>
+                              {onNavigateToNotes && (
+                                <button
+                                  onClick={() => {
+                                    handleStatusChange(apt.id, 'IN_PROGRESS');
+                                    onNavigateToNotes(apt.patientId);
+                                  }}
+                                  title="Open doctor clinical notes & prescription"
+                                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                                >
+                                  <FileText className="w-3 h-3 text-indigo-600" />
+                                  <span>Notes</span>
+                                </button>
+                              )}
+
+                              <button
+                                onClick={async () => {
+                                  await handleStatusChange(apt.id, 'COMPLETED');
+                                  if (onNavigateToBilling) {
+                                    onNavigateToBilling(apt);
+                                  }
+                                }}
+                                className={`px-3 py-1 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1 ${
+                                  isProcedureApt
+                                    ? 'bg-purple-600 hover:bg-purple-700'
+                                    : 'bg-emerald-600 hover:bg-emerald-700'
+                                }`}
+                                title={isProcedureApt ? 'Complete procedure & open Procedure Billing' : 'Complete visit and immediately open billing'}
+                              >
+                                <Check className="w-3 h-3 stroke-[3]" />
+                                <span>{isProcedureApt ? 'Collect Procedure Bill' : 'Done & Bill'}</span>
+                              </button>
+                            </>
                           )}
-
-                          <button
-                            onClick={async () => {
-                              await handleStatusChange(apt.id, 'COMPLETED');
-                              if (!isProcedureSlot && onNavigateToBilling) {
-                                onNavigateToBilling(apt);
-                              }
-                            }}
-                            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
-                            title={isProcedureSlot ? "Complete procedure" : "Complete visit and immediately open billing"}
-                          >
-                            <Check className="w-3 h-3 stroke-[3]" />
-                            <span>{isProcedureSlot ? 'Done' : 'Done & Bill'}</span>
-                          </button>
 
                           <button
                             onClick={() => handleStatusChange(apt.id, 'CANCELLED')}
@@ -1961,27 +1987,35 @@ We look forward to seeing you!`;
                                 onNavigateToBilling(apt);
                               }
                             }}
-                            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
-                            title={isProcedureSlot ? "Complete procedure" : "Complete visit and immediately open billing"}
+                            className={`px-3 py-1 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1 ${
+                              isProcedureApt
+                                ? 'bg-purple-600 hover:bg-purple-700'
+                                : 'bg-emerald-600 hover:bg-emerald-700'
+                            }`}
+                            title={isProcedureApt ? 'Complete procedure & open Procedure Billing' : 'Complete visit and immediately open billing'}
                           >
                             <Check className="w-3 h-3 stroke-[3]" />
-                            <span>{isProcedureSlot ? 'Done' : 'Done & Bill'}</span>
+                            <span>{isProcedureApt ? 'Collect Procedure Bill' : 'Done & Bill'}</span>
                           </button>
                         </>
                       )}
 
-                      {/* COMPLETED: After Visit */}
+                      {/* COMPLETED: After Consultation or Procedure */}
                       {apt.status === 'COMPLETED' && (
                         <>
                           {/* If not billed yet, show Bill / Collect for normal consultations only. Procedure slots are not billed through consultation bills! */}
                           {onNavigateToBilling && !isBillPaid && !isProcedureSlot && (
                             <button
                               onClick={() => onNavigateToBilling(apt)}
-                              title={apt.visitType === 'PROCEDURE' ? 'Collect Procedure Fee under Procedure Billing' : 'Collect Consultation Fee'}
-                              className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
+                              title={isProcedureApt ? 'Collect Procedure Fee under Procedure Billing' : 'Collect Consultation Fee'}
+                              className={`px-3 py-1 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1 ${
+                                isProcedureApt
+                                  ? 'bg-purple-600 hover:bg-purple-700'
+                                  : 'bg-emerald-600 hover:bg-emerald-700'
+                              }`}
                             >
                               <CreditCard className="w-3.5 h-3.5 text-white" />
-                              <span>{apt.visitType === 'PROCEDURE' ? 'Procedure Bill' : 'Bill / Collect'}</span>
+                              <span>{isProcedureApt ? 'Collect Procedure Bill' : 'Bill / Collect'}</span>
                             </button>
                           )}
 
@@ -1989,7 +2023,7 @@ We look forward to seeing you!`;
                           {isBillPaid && (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-black shadow-2xs">
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                              <span>✓ Billed</span>
+                              <span>{isProcedureApt ? '✓ Procedure Billed' : '✓ Billed'}</span>
                             </span>
                           )}
 
@@ -2062,9 +2096,18 @@ We look forward to seeing you!`;
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredAppointments.map((apt) => {
-                  const isBilled = !!apt.consultationBill;
-                  const isBillPaid = isBilled && (apt.consultationBill?.paymentStatus === 'PAID' || (apt.consultationBill?.pendingBalance || 0) <= 0);
-                  const isProcedureSlot = apt.visitType === 'PROCEDURE';
+                  const isProcedureApt = apt.visitType === 'PROCEDURE';
+                  const isProcedureSlot = isProcedureApt;
+                  const aptDateStr = apt.appointmentDate ? String(apt.appointmentDate).substring(0, 10) : todayStr;
+                  const isFutureApt = aptDateStr > todayStr;
+                  const opBill = (apt as any).operationBill;
+                  const isOpBilled = !!opBill;
+                  const isOpPaid = isOpBilled && (opBill.paymentStatus === 'PAID' || (opBill.pendingBalance || 0) <= 0);
+
+                  const isBilled = isProcedureApt ? isOpBilled : !!apt.consultationBill;
+                  const isBillPaid = isProcedureApt
+                    ? isOpPaid
+                    : isBilled && (apt.consultationBill?.paymentStatus === 'PAID' || (apt.consultationBill?.pendingBalance || 0) <= 0);
 
                   return (
                     <tr key={apt.id} className="hover:bg-slate-50/70 transition">
@@ -2178,40 +2221,47 @@ We look forward to seeing you!`;
 
                         {apt.status === 'SCHEDULED' && (
                           <>
-                            <button
-                              onClick={() => handleStatusChange(apt.id, 'IN_PROGRESS')}
-                              className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer"
-                              title="Start Consultation"
-                            >
-                              Start
-                            </button>
+                            {/* Only show clinical Start & Done & Bill for TODAY's appointments */}
+                            {!isFutureApt && (
+                              <>
+                                <button
+                                  onClick={() => handleStatusChange(apt.id, 'IN_PROGRESS')}
+                                  className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer"
+                                  title="Start Consultation"
+                                >
+                                  Start
+                                </button>
 
-                            <button
-                              onClick={async () => {
-                                await handleStatusChange(apt.id, 'COMPLETED');
-                                if (!isProcedureSlot && onNavigateToBilling) {
-                                  onNavigateToBilling(apt);
-                                }
-                              }}
-                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
-                              title={isProcedureSlot ? "Complete procedure" : "Mark Completed and Open Billing"}
-                            >
-                              <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                              <span>{isProcedureSlot ? 'Done' : 'Done & Bill'}</span>
-                            </button>
+                                <button
+                                  onClick={async () => {
+                                    await handleStatusChange(apt.id, 'COMPLETED');
+                                    if (onNavigateToBilling) {
+                                      onNavigateToBilling(apt);
+                                    }
+                                  }}
+                                  className={`px-3 py-1.5 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1 ${
+                                    isProcedureApt ? 'bg-purple-600 hover:bg-purple-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                                  }`}
+                                  title={isProcedureApt ? 'Complete procedure & open Procedure Billing' : 'Mark Completed and Open Billing'}
+                                >
+                                  <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                                  <span>{isProcedureApt ? 'Collect Procedure Bill' : 'Done & Bill'}</span>
+                                </button>
 
-                            {onNavigateToNotes && (
-                              <button
-                                onClick={() => {
-                                  handleStatusChange(apt.id, 'IN_PROGRESS');
-                                  onNavigateToNotes(apt.patientId);
-                                }}
-                                title="Open doctor clinical notes & prescription"
-                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
-                              >
-                                <FileText className="w-3.5 h-3.5 text-indigo-600" />
-                                <span>Notes</span>
-                              </button>
+                                {onNavigateToNotes && (
+                                  <button
+                                    onClick={() => {
+                                      handleStatusChange(apt.id, 'IN_PROGRESS');
+                                      onNavigateToNotes(apt.patientId);
+                                    }}
+                                    title="Open doctor clinical notes & prescription"
+                                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                                  >
+                                    <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                                    <span>Notes</span>
+                                  </button>
+                                )}
+                              </>
                             )}
 
                             <button
@@ -2261,11 +2311,13 @@ We look forward to seeing you!`;
                                   onNavigateToBilling(apt);
                                 }
                               }}
-                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
-                              title={isProcedureSlot ? "Complete procedure" : "Mark Completed and Open Billing"}
+                              className={`px-3 py-1.5 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1 ${
+                                isProcedureApt ? 'bg-purple-600 hover:bg-purple-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                              }`}
+                              title={isProcedureApt ? 'Complete procedure & open Procedure Billing' : 'Mark Completed and Open Billing'}
                             >
                               <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                              <span>{isProcedureSlot ? 'Done' : 'Done & Bill'}</span>
+                              <span>{isProcedureApt ? 'Collect Procedure Bill' : 'Done & Bill'}</span>
                             </button>
 
                             {onNavigateToNotes && (
@@ -2286,18 +2338,20 @@ We look forward to seeing you!`;
                             {onNavigateToBilling && !isBillPaid && !isProcedureSlot && (
                               <button
                                 onClick={() => onNavigateToBilling(apt)}
-                                title={apt.visitType === 'PROCEDURE' ? 'Collect Procedure Fee under Procedure Billing' : 'Collect Consultation Fee'}
-                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-xs"
+                                title={isProcedureApt ? 'Collect Procedure Fee under Procedure Billing' : 'Collect Consultation Fee'}
+                                className={`px-3 py-1.5 text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-xs ${
+                                  isProcedureApt ? 'bg-purple-600 hover:bg-purple-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                                }`}
                               >
                                 <CreditCard className="w-3.5 h-3.5 text-white" />
-                                <span>{apt.visitType === 'PROCEDURE' ? 'Procedure Bill' : 'Bill / Collect'}</span>
+                                <span>{isProcedureApt ? 'Collect Procedure Bill' : 'Bill / Collect'}</span>
                               </button>
                             )}
 
                             {isBillPaid && (
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-300 text-[11px] font-black">
                                 <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                <span>✓ Billed</span>
+                                <span>{isProcedureApt ? '✓ Procedure Billed' : '✓ Billed'}</span>
                               </span>
                             )}
 

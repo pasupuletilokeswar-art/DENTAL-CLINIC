@@ -244,7 +244,43 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
       orderBy: { startTime: 'asc' },
     });
 
-    res.json({ success: true, appointments });
+    // Enforce real-time operation / procedure billing detection:
+    // If appointment is a PROCEDURE slot, fetch and attach its latest operationBill
+    const patientIds = Array.from(new Set(appointments.map((a) => a.patientId)));
+    const opBills = await prisma.operationBill.findMany({
+      where: {
+        procedure: {
+          patientId: { in: patientIds },
+        },
+      },
+      include: {
+        procedure: {
+          include: { procedureMaster: true },
+        },
+      },
+      orderBy: { billDate: 'desc' },
+    });
+
+    const enrichedAppointments = appointments.map((apt) => {
+      let linkedOpBill = null;
+      if (apt.visitType === VisitType.PROCEDURE) {
+        linkedOpBill =
+          opBills.find(
+            (ob) =>
+              ob.procedure?.patientId === apt.patientId &&
+              (!apt.procedureName ||
+                ob.procedure?.procedureMaster?.name?.toLowerCase() === apt.procedureName.toLowerCase())
+          ) ||
+          opBills.find((ob) => ob.procedure?.patientId === apt.patientId) ||
+          null;
+      }
+      return {
+        ...apt,
+        operationBill: linkedOpBill,
+      };
+    });
+
+    res.json({ success: true, appointments: enrichedAppointments });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }

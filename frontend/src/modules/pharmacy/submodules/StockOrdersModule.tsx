@@ -12,9 +12,11 @@ import {
   Check,
   AlertOctagon,
   ExternalLink,
+  MessageCircle,
 } from 'lucide-react';
 import { MedicineMaster } from '../../../types';
 import { ReorderItem } from '../types';
+import { sendWhatsAppMessage } from '../../../services/whatsappService';
 
 interface StockOrdersModuleProps {
   medicines: MedicineMaster[];
@@ -55,6 +57,80 @@ export const StockOrdersModule: React.FC<StockOrdersModuleProps> = ({
       return false;
     }
   });
+
+  // Dedicated single-item Order Card Modal
+  const [orderCardMedicine, setOrderCardMedicine] = useState<ReorderItem | null>(null);
+  const [orderCardQty, setOrderCardQty] = useState<number>(50);
+  const [orderCardPhone, setOrderCardPhone] = useState<string>('');
+  const [orderCardNotes, setOrderCardNotes] = useState<string>('');
+
+  const handleOpenOrderCard = (item: ReorderItem) => {
+    const qty = orderQuantities[item.id] || item.suggestedQty || 50;
+    setOrderCardMedicine(item);
+    setOrderCardQty(qty);
+    setOrderCardPhone(orderSupplierPhone || localStorage.getItem('pharmacy_supplier_phone') || '');
+    setOrderCardNotes('');
+  };
+
+  const handleSendOrderCardWhatsApp = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!orderCardMedicine) return;
+    const clean = orderCardPhone.replace(/[^0-9]/g, '');
+    if (!clean || clean.length < 10) {
+      alert('Please enter a valid 10-digit supplier WhatsApp phone number.');
+      return;
+    }
+    setOrderSupplierPhone(clean);
+    try {
+      localStorage.setItem('pharmacy_supplier_phone', clean);
+    } catch {}
+
+    const dateStr = new Date().toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+    let msg = `🏥 *HospAI Dental Clinic - Medicine Purchase Order*\n`;
+    msg += `📅 *Order Date:* ${dateStr}\n`;
+    msg += `------------------------------------\n`;
+    msg += `📦 *Medicine:* ${orderCardMedicine.medicineName} (${orderCardMedicine.medicineType})\n`;
+    if (orderCardMedicine.brandName && orderCardMedicine.brandName !== orderCardMedicine.medicineName) {
+      msg += `🏷️ *Brand:* ${orderCardMedicine.brandName}\n`;
+    }
+    if (orderCardMedicine.packageInfo) {
+      msg += `💊 *Packaging:* ${orderCardMedicine.packageInfo}\n`;
+    }
+    msg += `📊 *Current Stock:* ${orderCardMedicine.currentStock} ${orderCardMedicine.sellingUnit}s\n`;
+    if (orderCardMedicine.reorderReason === 'EXPIRED') {
+      msg += `🛑 *Status:* EXPIRED BATCH (Sale Locked at POS - Urgent Replacement)\n`;
+    } else if (orderCardMedicine.reorderReason === 'OUT_OF_STOCK') {
+      msg += `⚠️ *Status:* OUT OF STOCK (0 Units Available)\n`;
+    } else if (orderCardMedicine.reorderReason === 'LOW_STOCK') {
+      msg += `⚠️ *Status:* LOW STOCK (Below Reorder Level of ${orderCardMedicine.reorderLevel})\n`;
+    }
+    msg += `✅ *Order Quantity Required:* *${orderCardQty} ${orderCardMedicine.sellingUnit}s*\n`;
+    if (orderCardNotes.trim()) {
+      msg += `📝 *Notes / Instructions:* ${orderCardNotes.trim()}\n`;
+    }
+    msg += `------------------------------------\n`;
+    msg += `Please confirm availability and dispatch earliest.\nHospAI Pharmacy Desk: +91 98765 43210`;
+
+    // Send via universal unsaved-number safe method
+    sendWhatsAppMessage(clean, msg);
+
+    // Mark as ordered in status map and local storage
+    const today = new Date().toLocaleDateString('en-IN');
+    const updated = {
+      ...orderedStatusMap,
+      [orderCardMedicine.id]: { date: today, qty: orderCardQty },
+    };
+    setOrderedStatusMap(updated);
+    try {
+      localStorage.setItem('pharmacy_ordered_status', JSON.stringify(updated));
+    } catch {}
+
+    setOrderCardMedicine(null);
+  };
 
   const handleDismissAlerts = () => {
     setDismissedAlerts(true);
@@ -218,10 +294,8 @@ export const StockOrdersModule: React.FC<StockOrdersModuleProps> = ({
 
     const cleanPhone = orderSupplierPhone.replace(/[^0-9]/g, '');
     if (cleanPhone && cleanPhone.length >= 10) {
-      const intlPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
       markSelectedItemsAsOrdered();
-      const url = `https://api.whatsapp.com/send?phone=${intlPhone}&text=${encodeURIComponent(msg)}`;
-      window.open(url, 'whatsapp_session');
+      sendWhatsAppMessage(cleanPhone, msg);
     } else {
       setModalSupplierPhone(orderSupplierPhone);
       setShowSupplierModal(true);
@@ -235,7 +309,6 @@ export const StockOrdersModule: React.FC<StockOrdersModuleProps> = ({
       alert('Please enter a valid 10-digit WhatsApp phone number.');
       return;
     }
-    const intlPhone = clean.length === 10 ? `91${clean}` : clean;
     setOrderSupplierPhone(clean);
     try {
       localStorage.setItem('pharmacy_supplier_phone', clean);
@@ -245,8 +318,7 @@ export const StockOrdersModule: React.FC<StockOrdersModuleProps> = ({
     setShowSupplierModal(false);
 
     const msg = pendingOrderMsg || buildOrderWhatsAppText();
-    const url = `https://api.whatsapp.com/send?phone=${intlPhone}&text=${encodeURIComponent(msg)}`;
-    window.open(url, 'whatsapp_session');
+    sendWhatsAppMessage(clean, msg);
   };
 
   const handleCopyOrderList = () => {
@@ -813,25 +885,35 @@ export const StockOrdersModule: React.FC<StockOrdersModuleProps> = ({
 
                       <td className="p-3">
                         {orderedStatus ? (
-                          <div className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-lg text-[10px] font-bold">
-                            <Check className="w-3 h-3 text-emerald-600" />
+                          <div className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-800 border border-emerald-300 px-2 py-1 rounded-xl text-[10px] font-bold">
+                            <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                             <span>Ordered {orderedStatus.qty}u ({orderedStatus.date})</span>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenOrderCard(med)}
+                              className="text-emerald-700 hover:text-emerald-900 font-extrabold ml-1 cursor-pointer underline"
+                              title="Re-open Order Card"
+                            >
+                              Reorder
+                            </button>
                             <button
                               type="button"
                               onClick={() => handleToggleItemOrdered(med.id)}
                               className="text-slate-400 hover:text-rose-600 text-[9px] underline ml-1 cursor-pointer"
-                              title="Revert to Pending"
+                              title="Clear Ordered Status"
                             >
-                              Undo
+                              Clear
                             </button>
                           </div>
                         ) : (
                           <button
                             type="button"
-                            onClick={() => handleToggleItemOrdered(med.id)}
-                            className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-lg text-[10px] font-bold cursor-pointer transition flex items-center gap-1"
+                            onClick={() => handleOpenOrderCard(med)}
+                            className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold cursor-pointer transition inline-flex items-center gap-1 shadow-2xs"
+                            title="Open WhatsApp Order Card"
                           >
-                            <span>+ Mark Ordered</span>
+                            <span className="text-emerald-600 font-bold">💬</span>
+                            <span>Order on WhatsApp</span>
                           </button>
                         )}
                       </td>
@@ -924,6 +1006,170 @@ export const StockOrdersModule: React.FC<StockOrdersModuleProps> = ({
                 >
                   <span>Open & Send on WhatsApp</span>
                   <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Interactive Single Medicine Order Card Modal */}
+      {orderCardMedicine && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-lg">
+                  💬
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold">Distributor Purchase Order Card</h3>
+                  <p className="text-[11px] text-slate-400">Dispatch medicine order directly to supplier WhatsApp</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOrderCardMedicine(null)}
+                className="text-slate-400 hover:text-white p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSendOrderCardWhatsApp} className="p-6 space-y-4 text-xs">
+              {/* Medicine Summary Card */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-[10px] uppercase font-black text-slate-400">Medicine to Reorder</div>
+                    <div className="text-base font-black text-slate-900">{orderCardMedicine.medicineName}</div>
+                    <div className="flex items-center gap-2 text-[11px] text-slate-500 font-medium mt-0.5">
+                      <span>Type: {orderCardMedicine.medicineType}</span>
+                      <span>&bull;</span>
+                      <span>Brand: {orderCardMedicine.brandName || 'Generic'}</span>
+                      <span>&bull;</span>
+                      <span>Pkg: {orderCardMedicine.packageInfo || 'Standard'}</span>
+                    </div>
+                  </div>
+                  {orderCardMedicine.reorderReason === 'EXPIRED' ? (
+                    <span className="px-2 py-0.5 bg-rose-100 text-rose-800 border border-rose-300 rounded-lg text-[10px] font-black uppercase">
+                      Expired (Sale Locked)
+                    </span>
+                  ) : orderCardMedicine.reorderReason === 'OUT_OF_STOCK' ? (
+                    <span className="px-2 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-[10px] font-black uppercase">
+                      Out of Stock (0)
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 bg-sky-100 text-sky-800 border border-sky-300 rounded-lg text-[10px] font-black uppercase">
+                      Low Stock
+                    </span>
+                  )}
+                </div>
+                <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
+                  <span className="text-slate-500">Current In-Stock:</span>
+                  <span className="font-black text-slate-800">
+                    {orderCardMedicine.currentStock} {orderCardMedicine.sellingUnit}s (Reorder Level: {orderCardMedicine.reorderLevel})
+                  </span>
+                </div>
+              </div>
+
+              {/* Order Quantity & Phone Number Inputs */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">
+                    Order Quantity ({orderCardMedicine.sellingUnit}s) *
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setOrderCardQty((prev) => Math.max(1, prev - 10))}
+                      className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm flex items-center justify-center cursor-pointer"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      required
+                      value={orderCardQty}
+                      onChange={(e) => setOrderCardQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      className="w-full text-center py-1.5 bg-teal-50 border border-teal-300 rounded-xl font-black text-sm text-[#0A685D] focus:ring-2 focus:ring-[#0A685D]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setOrderCardQty((prev) => prev + 10)}
+                      className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm flex items-center justify-center cursor-pointer"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">
+                    Distributor WhatsApp Phone *
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-mono font-bold text-slate-400 text-xs">
+                      +91
+                    </span>
+                    <input
+                      type="tel"
+                      required
+                      maxLength={10}
+                      value={orderCardPhone}
+                      onChange={(e) => setOrderCardPhone(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="e.g. 9876543210"
+                      className="w-full pl-10 pr-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-xs text-slate-900 focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <span className="block text-[9px] text-slate-400 mt-1">Works for unsaved distributor numbers</span>
+                </div>
+              </div>
+
+              {/* Order Notes */}
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">
+                  Special Notes / Delivery Remarks (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={orderCardNotes}
+                  onChange={(e) => setOrderCardNotes(e.target.value)}
+                  placeholder="e.g. Urgent morning dispatch required, supply latest batch"
+                  className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800"
+                />
+              </div>
+
+              {/* Live Preview Box */}
+              <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-2xl space-y-1">
+                <div className="text-[10px] font-bold text-emerald-900 flex items-center gap-1">
+                  <span>💬 WhatsApp Purchase Order Preview:</span>
+                </div>
+                <div className="text-[11px] font-mono text-emerald-950 bg-white/80 p-2.5 rounded-xl border border-emerald-200/60 whitespace-pre-line leading-relaxed max-h-28 overflow-y-auto">
+                  🏥 *HospAI Dental Clinic - Purchase Order*
+                  {'\n'}📦 Medicine: {orderCardMedicine.medicineName} ({orderCardMedicine.medicineType})
+                  {'\n'}✅ Required Qty: {orderCardQty} {orderCardMedicine.sellingUnit}s
+                  {'\n'}📊 Stock Status: {orderCardMedicine.currentStock <= 0 ? 'OUT OF STOCK' : 'LOW STOCK'}
+                  {orderCardNotes.trim() ? `\n📝 Note: ${orderCardNotes.trim()}` : ''}
+                  {'\n'}Please confirm dispatch.
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOrderCardMedicine(null)}
+                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 text-slate-600 rounded-xl font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-extrabold cursor-pointer transition shadow-xs flex items-center gap-1.5"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  <span>Send Order on WhatsApp</span>
                 </button>
               </div>
             </form>

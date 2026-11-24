@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../../config/prisma';
 import { authenticateToken } from '../../middleware/auth';
 import { emitRealtimeEvent } from '../../sockets';
-import { ProcedureStatus, PaymentMode, PaymentStatus, AppointmentStatus } from '@prisma/client';
+import { ProcedureStatus, PaymentMode, PaymentStatus, AppointmentStatus, VisitType } from '@prisma/client';
 
 const router = Router();
 
@@ -793,8 +793,13 @@ router.post('/:id/complete', authenticateToken, async (req: Request, res: Respon
         where: {
           patientId: proc.patientId,
           status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS] },
-          appointmentDate: { gte: startOfDay, lte: endOfDay },
+          OR: [
+            { visitType: VisitType.PROCEDURE },
+            ...(proc.procedureName ? [{ procedureName: proc.procedureName }] : []),
+            { appointmentDate: { gte: startOfDay, lte: endOfDay } },
+          ],
         },
+        orderBy: { appointmentDate: 'desc' },
       });
 
       let updatedApt = null;
@@ -808,6 +813,19 @@ router.post('/:id/complete', authenticateToken, async (req: Request, res: Respon
           },
         });
       }
+
+      // Also ensure any other scheduled/in-progress procedure appointment for this patient is completed
+      await tx.appointment.updateMany({
+        where: {
+          patientId: proc.patientId,
+          status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS] },
+          OR: [
+            { visitType: VisitType.PROCEDURE },
+            ...(proc.procedureName ? [{ procedureName: proc.procedureName }] : []),
+          ],
+        },
+        data: { status: AppointmentStatus.COMPLETED },
+      });
 
       // 2. Create Operation Bill
       const bill = await tx.operationBill.create({

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../../config/prisma';
 import { authenticateToken } from '../../middleware/auth';
 import { emitRealtimeEvent } from '../../sockets';
-import { PaymentMode, PaymentStatus } from '@prisma/client';
+import { PaymentMode, PaymentStatus, AppointmentStatus, VisitType } from '@prisma/client';
 
 const router = Router();
 
@@ -64,6 +64,21 @@ router.post('/operation/:id/payment', authenticateToken, async (req: Request, re
           payments: true,
         },
       });
+
+      if (bill.procedure?.patientId) {
+        const procName = (bill.procedure as any)?.procedureName || (bill.procedure as any)?.procedureMaster?.name;
+        await tx.appointment.updateMany({
+          where: {
+            patientId: bill.procedure.patientId,
+            status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS] },
+            OR: [
+              { visitType: VisitType.PROCEDURE },
+              ...(procName ? [{ procedureName: procName }] : []),
+            ],
+          },
+          data: { status: AppointmentStatus.COMPLETED },
+        });
+      }
 
       return { updatedBill, paymentRecord };
     });
