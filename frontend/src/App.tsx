@@ -193,11 +193,16 @@ export function App() {
                 onNavigateToBilling={(aptOrPatientId) => {
                   if (typeof aptOrPatientId === 'string') {
                     setSelectedPatientNav(aptOrPatientId);
+                    setActiveTab('billing');
                   } else if (aptOrPatientId && typeof aptOrPatientId === 'object') {
+                    // Procedure slots are not billed through consultation billing
+                    if (aptOrPatientId.visitType === 'PROCEDURE') {
+                      return;
+                    }
                     setPendingAppointmentToBill(aptOrPatientId);
                     if (aptOrPatientId.patientId) setSelectedPatientNav(aptOrPatientId.patientId);
+                    setActiveTab('billing');
                   }
-                  setActiveTab('billing');
                 }}
                 onNavigateToPatient={(patientId) => {
                   if (patientId) setSelectedPatientNav(patientId);

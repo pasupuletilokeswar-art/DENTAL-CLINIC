@@ -260,7 +260,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className={`relative bg-slate-50 border-r border-slate-200 text-slate-800 flex flex-col shrink-0 rounded-none font-sans select-none transition-all duration-300 ease-in-out ${
+      className={`no-print relative bg-slate-50 border-r border-slate-200 text-slate-800 flex flex-col shrink-0 rounded-none font-sans select-none transition-all duration-300 ease-in-out ${
         isCollapsed ? 'w-20' : 'w-64'
       }`}
     >

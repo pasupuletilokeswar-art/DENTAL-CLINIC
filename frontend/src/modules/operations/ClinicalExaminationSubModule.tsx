@@ -45,6 +45,7 @@ import { DentalChart2D } from '../dental-chart/components/DentalChart2D';
 import { ToothInspectionPanel } from '../dental-chart/components/ToothInspectionPanel';
 import { DentalChartSummary } from '../dental-chart/components/DentalChartSummary';
 import { FindingsLegend } from '../dental-chart/components/FindingsLegend';
+import { ClinicalFindingsSelector } from '../dental-chart/components/ClinicalFindingsSelector';
 
 interface ClinicalExaminationSubModuleProps {
   initialPatient?: Patient | null;
@@ -122,6 +123,49 @@ function formatLocalDateKey(year: number, month: number, day: number): string {
   return `${year}-${mm}-${dd}`;
 }
 
+function parseSlotToTimestamp(dateStr: string, slotStr: string): { start: number; end: number } {
+  const [timePart, modifier] = (slotStr || '09:00 AM').trim().split(' ');
+  let [hours, minutes] = (timePart || '09:00').split(':').map(Number);
+  if (modifier === 'PM' && hours < 12) hours += 12;
+  if (modifier === 'AM' && hours === 12) hours = 0;
+  const [y, m, d] = (dateStr || '').split('-').map(Number);
+  const start = new Date(y, (m || 1) - 1, d || 1, hours, minutes, 0).getTime();
+  const end = start + 30 * 60 * 1000;
+  return { start, end };
+}
+
+function isSlotConflictingWithAppointment(
+  dateStr: string,
+  slotStr: string,
+  appointment: any,
+  ignoreAppointmentId?: string | null
+): boolean {
+  if (!appointment || appointment.status === 'CANCELLED' || appointment.status === 'COMPLETED') return false;
+  if (ignoreAppointmentId && appointment.id === ignoreAppointmentId) return false;
+  const { start: slotStart, end: slotEnd } = parseSlotToTimestamp(dateStr, slotStr);
+  const aptStart = new Date(appointment.startTime).getTime();
+  let aptEnd = appointment.endTime ? new Date(appointment.endTime).getTime() : 0;
+  if (!aptEnd || isNaN(aptEnd)) {
+    const dur = appointment.durationMinutes || 30;
+    aptEnd = aptStart + dur * 60 * 1000;
+  }
+  return slotStart < aptEnd && slotEnd > aptStart;
+}
+
+function formatSlotTimeString(dateVal: any): string {
+  if (!dateVal) return '';
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return '';
+  let hours = d.getHours();
+  const minutes = d.getMinutes();
+  const modifier = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  if (hours === 0) hours = 12;
+  const hh = String(hours).padStart(2, '0');
+  const mm = String(minutes).padStart(2, '0');
+  return `${hh}:${mm} ${modifier}`;
+}
+
 export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModuleProps> = ({
   initialPatient = null,
   initialNote = null,
@@ -133,6 +177,7 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
 
   // Sub-Navigation Tabs: New Examination Form vs Previous Notes Archive
   const [activeSubTab, setActiveSubTab] = useState<'NEW_EXAM' | 'PREVIOUS_NOTES'>('NEW_EXAM');
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(initialNote?.id || null);
 
   // ==========================================
   // SECTION 1: Patient Complaint
@@ -149,6 +194,7 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
   // ==========================================
   const [doctors, setDoctors] = useState<any[]>([]);
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>('');
+  const [activeAppointmentId, setActiveAppointmentId] = useState<string | null>(initialNote?.appointmentId || null);
   const [consultationDate, setConsultationDate] = useState<string>(new Date().toISOString().substring(0, 10));
   const [patientDoctorNotice, setPatientDoctorNotice] = useState<string | null>(null);
 
@@ -156,11 +202,13 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
   const handlePatientSelect = async (patient: Patient | null) => {
     setSelectedPatient(patient);
     setPatientDoctorNotice(null);
+    setActiveAppointmentId(null);
     if (!patient) return;
     try {
       const res = await api.get(`/appointments/patient-active/${patient.id}`);
-      if (res.data.success && res.data.doctorId) {
-        setSelectedDoctorId(res.data.doctorId);
+      if (res.data.success) {
+        if (res.data.doctorId) setSelectedDoctorId(res.data.doctorId);
+        if (res.data.activeAppointment?.id) setActiveAppointmentId(res.data.activeAppointment.id);
         const docName = res.data.doctor?.user?.fullName;
         if (docName) {
           setPatientDoctorNotice(`Doctor auto-assigned: Dr. ${docName}`);
@@ -175,8 +223,9 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
     if (selectedPatient?.id && !selectedDoctorId) {
       api.get(`/appointments/patient-active/${selectedPatient.id}`)
         .then((res) => {
-          if (res.data.success && res.data.doctorId) {
-            setSelectedDoctorId(res.data.doctorId);
+          if (res.data.success) {
+            if (res.data.doctorId) setSelectedDoctorId(res.data.doctorId);
+            if (res.data.activeAppointment?.id) setActiveAppointmentId(res.data.activeAppointment.id);
             const docName = res.data.doctor?.user?.fullName;
             if (docName) {
               setPatientDoctorNotice(`Doctor auto-assigned: Dr. ${docName}`);
@@ -196,6 +245,7 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
   // 3D Dental Charting State
   const [chartViewMode, setChartViewMode] = useState<'3D' | '2D'>('3D');
   const [selectedChartFDI, setSelectedChartFDI] = useState<number>(16);
+  const [selectedCondition, setSelectedCondition] = useState<string>('Dental Caries');
   const [chartFindings, setChartFindings] = useState<DentalFindingItem[]>([]);
   const [loadingChart, setLoadingChart] = useState<boolean>(false);
   const [toothHistory, setToothHistory] = useState<DentalFindingItem[]>([]);
@@ -284,7 +334,15 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
   // Auto-adjust calendarPickedTime to first upcoming slot on today
   useEffect(() => {
     if (showCalendarModal) {
-      const visible = TIME_SLOTS.filter((s) => !isSlotPast(s, calendarPickedDate));
+      const currentTreatmentAptId =
+        typeof calendarTarget === 'object' && calendarTarget.type === 'treatment'
+          ? treatmentsList[calendarTarget.index]?.appointmentId
+          : null;
+      const visible = TIME_SLOTS.filter(
+        (s) =>
+          !isSlotPast(s, calendarPickedDate) &&
+          !dayAppointments.some((a) => isSlotConflictingWithAppointment(calendarPickedDate, s, a, currentTreatmentAptId))
+      );
       if (!calendarPickedTime || isSlotPast(calendarPickedTime, calendarPickedDate)) {
         const firstFree = visible[0] || '';
         if (firstFree && firstFree !== calendarPickedTime) {
@@ -292,7 +350,91 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
         }
       }
     }
-  }, [calendarPickedDate, showCalendarModal]);
+  }, [calendarPickedDate, showCalendarModal, dayAppointments]);
+
+  // Synchronize treatment plan with live appointment records
+  useEffect(() => {
+    if (!selectedPatient?.id) return;
+
+    let isMounted = true;
+    const syncWithAppointments = async () => {
+      try {
+        const res = await api.get('/appointments', {
+          params: { patientId: selectedPatient.id, limit: 100 },
+        });
+        const appointments: any[] = res.data?.appointments || (Array.isArray(res.data) ? res.data : []);
+        if (!appointments || appointments.length === 0 || !isMounted) return;
+
+        setTreatmentsList((prevList) => {
+          let hasChange = false;
+          const updated = prevList.map((t) => {
+            const matchingApt = appointments.find((a) => {
+              if (a.status === 'CANCELLED') return false;
+              if (t.appointmentId && a.id === t.appointmentId) return true;
+              if (
+                a.procedureName &&
+                t.treatment &&
+                a.procedureName.toLowerCase().trim() === t.treatment.toLowerCase().trim()
+              ) {
+                return true;
+              }
+              return false;
+            });
+
+            if (!matchingApt) return t;
+
+            const aptDateStr = matchingApt.appointmentDate
+              ? String(matchingApt.appointmentDate).substring(0, 10)
+              : matchingApt.startTime
+              ? String(matchingApt.startTime).substring(0, 10)
+              : '';
+            const slotStr = formatSlotTimeString(matchingApt.startTime);
+
+            let newAdvice = t.advice || '';
+            if (slotStr) {
+              if (newAdvice.includes('(Slot:')) {
+                newAdvice = newAdvice.replace(/\(Slot:\s*[^)]+\)/, `(Slot: ${slotStr})`);
+              } else if (newAdvice.includes('Slot:')) {
+                newAdvice = newAdvice.replace(/Slot:\s*[^;\n)]+/, `Slot: ${slotStr}`);
+              } else {
+                newAdvice = newAdvice ? `${newAdvice} (Slot: ${slotStr})` : `Slot: ${slotStr}`;
+              }
+            }
+
+            const newPlannedDate = aptDateStr || t.plannedDate;
+            const newAppointmentId = matchingApt.id || t.appointmentId;
+            const newTimeSlot = slotStr || t.timeSlot;
+
+            if (
+              newPlannedDate !== t.plannedDate ||
+              newAdvice !== t.advice ||
+              newAppointmentId !== t.appointmentId ||
+              newTimeSlot !== t.timeSlot
+            ) {
+              hasChange = true;
+              return {
+                ...t,
+                plannedDate: newPlannedDate,
+                advice: newAdvice,
+                appointmentId: newAppointmentId,
+                timeSlot: newTimeSlot,
+              };
+            }
+            return t;
+          });
+
+          return hasChange ? updated : prevList;
+        });
+      } catch (err) {
+        console.warn('Could not sync appointments with treatments plan:', err);
+      }
+    };
+
+    syncWithAppointments();
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedPatient?.id]);
 
   // ==========================================
   // PREVIOUS CLINICAL NOTES ARCHIVE STATE
@@ -355,6 +497,7 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
   // Load existing clinical note when editing
   useEffect(() => {
     if (initialNote) {
+      setEditingNoteId(initialNote.id || null);
       if (initialNote.patient) setSelectedPatient(initialNote.patient);
       if (initialNote.consultationDate) {
         const d = new Date(initialNote.consultationDate);
@@ -386,8 +529,26 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
           }))
         );
       }
-      if (initialNote.recommendedTreatments && Array.isArray(initialNote.recommendedTreatments)) {
-        setTreatmentsList(initialNote.recommendedTreatments);
+      if (initialNote.recommendedTreatments) {
+        let recs = initialNote.recommendedTreatments;
+        if (typeof recs === 'string') {
+          try {
+            recs = JSON.parse(recs);
+          } catch {
+            recs = [];
+          }
+        }
+        if (Array.isArray(recs)) {
+          setTreatmentsList(
+            recs.map((t: any) => ({
+              ...t,
+              plannedDate: t.plannedDate ? String(t.plannedDate).substring(0, 10) : '',
+              followUpDate: t.followUpDate ? String(t.followUpDate).substring(0, 10) : '',
+              appointmentId: t.appointmentId || null,
+              timeSlot: t.timeSlot || null,
+            }))
+          );
+        }
       }
     }
   }, [initialNote]);
@@ -570,9 +731,18 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
       }
 
       // If treatment is recommended, sync into treatmentsList if not already present
-      if (findingData.treatment && findingData.treatment.trim()) {
+      if (
+        findingData.treatment &&
+        findingData.treatment.trim() &&
+        !findingData.treatment.includes('Observation Only') &&
+        !findingData.treatment.includes('No Treatment')
+      ) {
         const treatName = findingData.treatment.trim();
-        const existingTreat = treatmentsList.find((t) => t.treatment.toLowerCase() === treatName.toLowerCase());
+        const existingTreat = treatmentsList.find(
+          (t) =>
+            t.treatment.toLowerCase() === treatName.toLowerCase() &&
+            t.advice?.includes(`Tooth #${findingData.toothNumber}`)
+        );
         if (!existingTreat) {
           setTreatmentsList((prev) => [
             ...prev,
@@ -603,31 +773,38 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
 
   // SECTION 4 Handlers: Recommended Treatments
   const addTreatment = (name: string) => {
-    setTreatmentsList([
-      ...treatmentsList,
+    setTreatmentsList((prev) => [
+      ...prev,
       {
         treatment: name,
         priority: 'Normal',
         advice: '',
         plannedDate: '',
         followUpDate: '',
+        appointmentId: null,
+        timeSlot: null,
       },
     ]);
   };
 
   const updateTreatment = (index: number, field: keyof RecommendedTreatment, value: any) => {
-    const updated = [...treatmentsList];
-    updated[index] = { ...updated[index], [field]: value };
-    setTreatmentsList(updated);
+    setTreatmentsList((prev) => {
+      const updated = [...prev];
+      if (updated[index]) {
+        updated[index] = { ...updated[index], [field]: value };
+      }
+      return updated;
+    });
   };
 
   const removeTreatment = (index: number) => {
-    setTreatmentsList(treatmentsList.filter((_, i) => i !== index));
+    setTreatmentsList((prev) => prev.filter((_, i) => i !== index));
   };
 
   // Reset Form
   const handleResetForm = () => {
     if (window.confirm('Reset all fields in this clinical examination form?')) {
+      setEditingNoteId(null);
       setSelectedPatient(null);
       setVisitDate(new Date().toISOString().substring(0, 10));
       setSelectedComplaints([]);
@@ -725,13 +902,30 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
       setFollowUpDate(calendarPickedDate);
       setFollowUpTime(calendarPickedTime);
     } else if (typeof calendarTarget === 'object' && calendarTarget.type === 'treatment') {
-      updateTreatment(calendarTarget.index, 'plannedDate', calendarPickedDate);
-      if (calendarPickedTime) {
-        const curAdvice = treatmentsList[calendarTarget.index]?.advice || '';
-        if (!curAdvice.includes('Slot:')) {
-          updateTreatment(calendarTarget.index, 'advice', curAdvice ? `${curAdvice} (Slot: ${calendarPickedTime})` : `Slot: ${calendarPickedTime}`);
+      const targetIndex = calendarTarget.index;
+      setTreatmentsList((prev) => {
+        const updated = [...prev];
+        if (updated[targetIndex]) {
+          const cur = updated[targetIndex];
+          let updatedAdvice = cur.advice || '';
+          if (calendarPickedTime) {
+            if (updatedAdvice.includes('(Slot:')) {
+              updatedAdvice = updatedAdvice.replace(/\(Slot:\s*[^)]+\)/, `(Slot: ${calendarPickedTime})`);
+            } else if (updatedAdvice.includes('Slot:')) {
+              updatedAdvice = updatedAdvice.replace(/Slot:\s*[^;\n)]+/, `Slot: ${calendarPickedTime}`);
+            } else {
+              updatedAdvice = updatedAdvice ? `${updatedAdvice} (Slot: ${calendarPickedTime})` : `Slot: ${calendarPickedTime}`;
+            }
+          }
+          updated[targetIndex] = {
+            ...cur,
+            plannedDate: calendarPickedDate,
+            advice: updatedAdvice,
+            timeSlot: calendarPickedTime || cur.timeSlot,
+          };
         }
-      }
+        return updated;
+      });
     }
 
     // Optional direct appointment creation if toggled
@@ -775,12 +969,27 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
 
         const res = await api.post('/appointments', aptPayload);
         if (res.data.success) {
-          const aptCode = res.data.appointment?.appointmentCode || 'APT-SCHEDULED';
+          const bookedApt = res.data.appointment;
+          const aptCode = bookedApt?.appointmentCode || 'APT-SCHEDULED';
           setBookedAppointmentCode(aptCode);
           setBookingAppointmentSuccess(
             `Appointment (${aptCode}) successfully booked for ${selectedPatient.name} on ${calendarPickedDate} at ${calendarPickedTime} with Dr. ${activeDoctor?.user?.fullName || 'Doctor'}! It immediately reflects in the Appointments Module.`
           );
           setTimeout(() => setBookingAppointmentSuccess(null), 7000);
+
+          if (isProcedureTarget && bookedApt?.id) {
+            const targetIndex = calendarTarget.index;
+            setTreatmentsList((prev) => {
+              const updated = [...prev];
+              if (updated[targetIndex]) {
+                updated[targetIndex] = {
+                  ...updated[targetIndex],
+                  appointmentId: bookedApt.id,
+                };
+              }
+              return updated;
+            });
+          }
         }
       } catch (err: any) {
         console.error('Error creating appointment from calendar picker:', err);
@@ -820,8 +1029,10 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
     setSubmitting(true);
     try {
       const payload = {
+        id: editingNoteId || undefined,
         patientId: selectedPatient.id,
         doctorId: selectedDoctorId,
+        appointmentId: activeAppointmentId || initialNote?.appointmentId || null,
         consultationDate: visitDate || consultationDate,
         chiefComplaints: selectedComplaints.length > 0 ? selectedComplaints : ['Routine Evaluation'],
         durationOfComplaint: durationOfComplaint.trim() || null,
@@ -844,8 +1055,10 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
             treatment: t.treatment.trim(),
             priority: t.priority || 'Normal',
             advice: t.advice?.trim() || null,
-            plannedDate: t.plannedDate || null,
-            followUpDate: t.followUpDate || null,
+            plannedDate: t.plannedDate ? String(t.plannedDate).substring(0, 10) : null,
+            followUpDate: t.followUpDate ? String(t.followUpDate).substring(0, 10) : null,
+            appointmentId: t.appointmentId || null,
+            timeSlot: t.timeSlot || null,
           })),
         followUpDate: null,
         notes: generalNotes.trim() || null,
@@ -855,6 +1068,9 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
       const res = await api.post('/clinical-notes/examination', payload);
 
       if (res.data.success) {
+        if (res.data.note?.id) {
+          setEditingNoteId(res.data.note.id);
+        }
         setSavedSuccess({
           note: res.data.note,
           patient: selectedPatient,
@@ -905,6 +1121,7 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
 
   // Load a historical note back into the active form
   const handleLoadNoteIntoForm = (note: any) => {
+    if (note.id) setEditingNoteId(note.id);
     if (note.patient) setSelectedPatient(note.patient);
     if (note.consultationDate) {
       const d = new Date(note.consultationDate);
@@ -936,8 +1153,26 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
         }))
       );
     }
-    if (note.recommendedTreatments && Array.isArray(note.recommendedTreatments)) {
-      setTreatmentsList(note.recommendedTreatments);
+    if (note.recommendedTreatments) {
+      let recs = note.recommendedTreatments;
+      if (typeof recs === 'string') {
+        try {
+          recs = JSON.parse(recs);
+        } catch {
+          recs = [];
+        }
+      }
+      if (Array.isArray(recs)) {
+        setTreatmentsList(
+          recs.map((t: any) => ({
+            ...t,
+            plannedDate: t.plannedDate ? String(t.plannedDate).substring(0, 10) : '',
+            followUpDate: t.followUpDate ? String(t.followUpDate).substring(0, 10) : '',
+            appointmentId: t.appointmentId || null,
+            timeSlot: t.timeSlot || null,
+          }))
+        );
+      }
     }
 
     setActiveSubTab('NEW_EXAM');
@@ -1474,26 +1709,39 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
                   </div>
 
                   {/* Visualizer & Inspection Panel Grid */}
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                    {/* Visualizer Area (3D or 2D) */}
-                    <div className="lg:col-span-7 bg-slate-900 rounded-2xl overflow-hidden shadow-sm relative min-h-[460px] flex flex-col justify-between border border-slate-800">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                    {/* Visualizer Area (3D or 2D) & Clinical Findings Selector */}
+                    <div className="lg:col-span-7 flex flex-col gap-3">
                       {chartViewMode === '3D' ? (
                         <DentalModelViewer
                           selectedFDI={selectedChartFDI}
                           onSelectTooth={(fdi) => setSelectedChartFDI(fdi)}
                           findings={chartFindings}
+                          showMiniArchSelector={false}
+                          className="h-[430px]"
                         />
                       ) : (
-                        <DentalChart2D
-                          selectedFDI={selectedChartFDI}
-                          onSelectTooth={(fdi) => setSelectedChartFDI(fdi)}
-                          findings={chartFindings}
-                        />
+                        <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-xs">
+                          <DentalChart2D
+                            selectedFDI={selectedChartFDI}
+                            onSelectTooth={(fdi) => setSelectedChartFDI(fdi)}
+                            findings={chartFindings}
+                          />
+                        </div>
                       )}
+
+                      {/* Findings Legend */}
+                      <FindingsLegend />
+
+                      {/* Clinical Findings Search & Selector covering the remaining space */}
+                      <ClinicalFindingsSelector
+                        selectedCondition={selectedCondition}
+                        onSelectCondition={(cond) => setSelectedCondition(cond)}
+                      />
                     </div>
 
                     {/* Tooth Inspection & Finding Form */}
-                    <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between overflow-hidden">
+                    <div className="lg:col-span-5 self-start h-fit">
                       <ToothInspectionPanel
                         tooth={selectedToothObj}
                         onSelectTooth={(fdi) => setSelectedChartFDI(fdi)}
@@ -1502,13 +1750,14 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
                         onSaveFinding={handleSaveChartFinding}
                         toothHistory={toothHistory}
                         isLoadingHistory={loadingToothHistory}
+                        selectedCondition={selectedCondition}
+                        onSelectCondition={(cond) => setSelectedCondition(cond)}
                       />
                     </div>
                   </div>
 
-                  {/* Findings Legend & Findings Summary Table */}
+                  {/* Findings Summary Table */}
                   <div className="space-y-4 pt-2">
-                    <FindingsLegend />
                     <DentalChartSummary
                       findings={chartFindings}
                       onSelectTooth={(fdi) => {
@@ -1685,67 +1934,23 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
             </div>
 
             <div className="p-6 space-y-5">
-              {/* Quick Add Common Treatments */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-2">
-                  Quick Add Recommended Treatments
-                </label>
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {COMMON_TREATMENTS.map((t) => (
-                    <button
-                      type="button"
-                      key={t}
-                      onClick={() => addTreatment(t)}
-                      className="text-xs px-2.5 py-1 bg-slate-50 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300 text-slate-700 border border-slate-200 rounded-lg font-medium transition cursor-pointer"
-                    >
-                      + {t}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Custom treatment input */}
-                <div className="flex items-center gap-2 max-w-md">
-                  <input
-                    type="text"
-                    placeholder="Enter custom recommended treatment..."
-                    value={customTreatmentInput}
-                    onChange={(e) => setCustomTreatmentInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        if (customTreatmentInput.trim()) {
-                          addTreatment(customTreatmentInput.trim());
-                          setCustomTreatmentInput('');
-                        }
-                      }
-                    }}
-                    className="text-xs p-2 bg-white border border-slate-200 rounded-xl flex-1 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (customTreatmentInput.trim()) {
-                        addTreatment(customTreatmentInput.trim());
-                        setCustomTreatmentInput('');
-                      }
-                    }}
-                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl border border-slate-200 cursor-pointer"
-                  >
-                    + Add Treatment
-                  </button>
-                </div>
-              </div>
-
               {/* Structured Treatments List */}
               <div className="space-y-3">
-                <label className="block text-xs font-bold text-slate-800">
-                  Recommended Treatments Plan ({treatmentsList.length})
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-slate-800">
+                    Recommended Treatments Plan ({treatmentsList.length})
+                  </label>
+                  <span className="text-[11px] text-slate-400">
+                    Populated from Tooth Inspection & Findings
+                  </span>
+                </div>
 
                 {treatmentsList.length === 0 ? (
                   <div className="p-5 bg-slate-50/80 rounded-xl border border-dashed border-slate-200 text-center">
                     <p className="text-xs font-semibold text-slate-600">No recommended treatments added yet</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Click a quick-add chip above or enter a custom treatment to record recommendations.</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Select a Recommended Treatment in the Tooth Inspection Panel above when saving tooth findings to automatically populate this plan.
+                    </p>
                   </div>
                 ) : (
                   treatmentsList.map((t, idx) => (
@@ -1798,7 +2003,7 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
                           <div className="flex items-center gap-1.5">
                             <input
                               type="date"
-                              value={t.plannedDate || ''}
+                              value={t.plannedDate ? String(t.plannedDate).substring(0, 10) : ''}
                               onChange={(e) => updateTreatment(idx, 'plannedDate', e.target.value)}
                               className="w-full text-xs p-2 bg-white border border-slate-200 rounded-lg focus:outline-hidden"
                             />
@@ -1806,8 +2011,16 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
                               type="button"
                               onClick={() => {
                                 setCalendarTarget({ type: 'treatment', index: idx });
-                                setCalendarPickedDate(t.plannedDate || todayStr);
-                                setCalendarCurrentMonth(t.plannedDate ? new Date(t.plannedDate) : new Date());
+                                const pDate = t.plannedDate ? String(t.plannedDate).substring(0, 10) : todayStr;
+                                setCalendarPickedDate(pDate);
+                                if (t.timeSlot) {
+                                  setCalendarPickedTime(t.timeSlot);
+                                } else if (t.advice && t.advice.includes('Slot:')) {
+                                  const match = t.advice.match(/Slot:\s*([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM))/i);
+                                  if (match) setCalendarPickedTime(match[1]);
+                                }
+                                const [py, pm, pd] = pDate.split('-').map(Number);
+                                setCalendarCurrentMonth(py && pm ? new Date(py, pm - 1, pd || 1) : new Date());
                                 setShowCalendarModal(true);
                               }}
                               className="p-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg border border-blue-200 transition cursor-pointer shrink-0"
@@ -2297,7 +2510,7 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
                   Doctor Time Slots ({calendarPickedDate})
                 </label>
                 <span className="text-[10px] text-slate-400 font-medium">
-                  {dayAppointments.length} existing booked on this date
+                  {dayAppointments.filter((a) => a.status !== 'CANCELLED' && a.status !== 'COMPLETED').length} existing booked on this date
                 </span>
               </div>
 
@@ -2311,11 +2524,15 @@ export const ClinicalExaminationSubModule: React.FC<ClinicalExaminationSubModule
                       </div>
                     );
                   }
+                  const currentTreatmentAptId =
+                    typeof calendarTarget === 'object' && calendarTarget.type === 'treatment'
+                      ? treatmentsList[calendarTarget.index]?.appointmentId
+                      : null;
+
                   return visibleSlots.map((slot) => {
-                    const isBooked = dayAppointments.some((a) => {
-                      const aptTime = new Date(a.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                      return aptTime === slot;
-                    });
+                    const isBooked = dayAppointments.some((a) =>
+                      isSlotConflictingWithAppointment(calendarPickedDate, slot, a, currentTreatmentAptId)
+                    );
 
                     const isSelected = calendarPickedTime === slot;
 

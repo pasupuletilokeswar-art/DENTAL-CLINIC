@@ -12,6 +12,7 @@ import {
   ToothSurface,
   DentalFindingItem,
   CLINICAL_CONDITIONS,
+  RECOMMENDED_TREATMENT_OPTIONS,
   getAdjacentToothFDI,
   getConditionColor,
 } from '../types/dentalChart.types';
@@ -33,6 +34,9 @@ interface ToothInspectionPanelProps {
   }) => Promise<void>;
   toothHistory: DentalFindingItem[];
   isLoadingHistory?: boolean;
+  selectedCondition?: string;
+  onSelectCondition?: (cond: string) => void;
+  className?: string;
 }
 
 export const ToothInspectionPanel: React.FC<ToothInspectionPanelProps> = ({
@@ -42,6 +46,9 @@ export const ToothInspectionPanel: React.FC<ToothInspectionPanelProps> = ({
   onSaveFinding,
   toothHistory,
   isLoadingHistory,
+  selectedCondition: selectedConditionProp,
+  onSelectCondition,
+  className,
 }) => {
   const [activeTab, setActiveTab] = useState<'Surface' | 'Details' | 'History'>('Surface');
 
@@ -50,7 +57,15 @@ export const ToothInspectionPanel: React.FC<ToothInspectionPanelProps> = ({
   const [selectedSurface, setSelectedSurface] = useState<ToothSurface>(defaultSurface);
 
   // Form State
-  const [selectedCondition, setSelectedCondition] = useState<string>('Dental Caries');
+  const [internalCondition, setInternalCondition] = useState<string>('Dental Caries');
+  const currentCondition = selectedConditionProp !== undefined ? selectedConditionProp : internalCondition;
+  const handleConditionChange = (newCond: string) => {
+    setInternalCondition(newCond);
+    if (onSelectCondition) {
+      onSelectCondition(newCond);
+    }
+  };
+
   const [selectedSeverity, setSelectedSeverity] = useState<'Mild' | 'Moderate' | 'Severe' | 'Critical' | 'N/A'>('Moderate');
   const [selectedTreatment, setSelectedTreatment] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
@@ -81,7 +96,7 @@ export const ToothInspectionPanel: React.FC<ToothInspectionPanelProps> = ({
         toothNumber: tooth.fdi,
         toothName: tooth.name,
         surface: selectedSurface,
-        condition: selectedCondition,
+        condition: currentCondition,
         severity: selectedSeverity,
         treatment: selectedTreatment,
         notes,
@@ -112,7 +127,7 @@ export const ToothInspectionPanel: React.FC<ToothInspectionPanelProps> = ({
   };
 
   return (
-    <div className="w-full lg:w-[430px] bg-white border border-slate-200 rounded-3xl p-5 shadow-sm flex flex-col gap-4 select-none shrink-0 transition-all">
+    <div className={`w-full bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col gap-4 select-none transition-all ${className || ''}`}>
       {/* 1. Panel Header */}
       <div className="flex items-center border-b border-slate-100 pb-3">
         <div className="flex items-center gap-2 text-teal-700">
@@ -227,28 +242,8 @@ export const ToothInspectionPanel: React.FC<ToothInspectionPanelProps> = ({
             </div>
           </div>
 
-          {/* Clinical Finding & Severity Dropdowns */}
+          {/* Severity & Recommended Treatment Dropdowns */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {/* Condition Dropdown */}
-            <div>
-              <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                Clinical Finding
-              </label>
-              <div className="relative">
-                <select
-                  value={selectedCondition}
-                  onChange={(e) => setSelectedCondition(e.target.value)}
-                  className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-teal-500 shadow-2xs cursor-pointer"
-                >
-                  {CLINICAL_CONDITIONS.map((cond) => (
-                    <option key={cond.name} value={cond.name}>
-                      {cond.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
             {/* Severity Dropdown */}
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
@@ -268,28 +263,25 @@ export const ToothInspectionPanel: React.FC<ToothInspectionPanelProps> = ({
                 <option value="N/A">Not Applicable</option>
               </select>
             </div>
-          </div>
 
-          {/* Treatment Dropdown */}
-          <div>
-            <label className="block text-[11px] font-bold text-slate-700 mb-1">
-              Recommended Treatment (Optional)
-            </label>
-            <select
-              value={selectedTreatment}
-              onChange={(e) => setSelectedTreatment(e.target.value)}
-              className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-teal-500 shadow-2xs cursor-pointer"
-            >
-              <option value="">-- No Treatment / Observation Only --</option>
-              <option value="Restoration">Restoration (Composite / Amalgam)</option>
-              <option value="Root Canal Treatment">Root Canal Treatment (Endodontic)</option>
-              <option value="Crown">Crown / Prosthetic Cap</option>
-              <option value="Extraction">Extraction (Routine / Surgical)</option>
-              <option value="Scaling">Scaling & Deep Periodontal Cleaning</option>
-              <option value="Periodontal Treatment">Periodontal Flap / Gingival Graft</option>
-              <option value="Observation">Observation / Re-evaluate at next visit</option>
-              <option value="Other">Other Clinical Action</option>
-            </select>
+            {/* Treatment Dropdown */}
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                Recommended Treatment (Optional)
+              </label>
+              <select
+                value={selectedTreatment}
+                onChange={(e) => setSelectedTreatment(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-teal-500 shadow-2xs cursor-pointer truncate"
+              >
+                <option value="">-- No Treatment / Observation Only --</option>
+                {RECOMMENDED_TREATMENT_OPTIONS.map((treatment) => (
+                  <option key={treatment} value={treatment}>
+                    {treatment}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {/* Notes Textarea */}

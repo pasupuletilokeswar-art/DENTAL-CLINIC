@@ -549,10 +549,24 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
       return;
     }
 
-    // Guard: Prevent duplicate booking if active appointment exists and not in reschedule mode
+    // Guard: Prevent duplicate booking ONLY if the selected time slot directly overlaps with the patient's existing active appointment
     if (activePatientAppointment && !isRescheduleMode) {
-      setBookingError(`Patient already has an active appointment (${activePatientAppointment.appointmentCode}). Please click 'Reschedule' to change the date/time instead of creating a duplicate.`);
-      return;
+      const aptDateStr = activePatientAppointment.appointmentDate
+        ? String(activePatientAppointment.appointmentDate).substring(0, 10)
+        : '';
+      if (aptDateStr === bookingData.appointmentDate) {
+        const newStart = new Date(`${bookingData.appointmentDate}T${bookingData.timeSlot}:00`).getTime();
+        const newEnd = newStart + (bookingData.durationMinutes || 30) * 60 * 1000;
+        const existingStart = new Date(activePatientAppointment.startTime).getTime();
+        const existingEnd = activePatientAppointment.endTime
+          ? new Date(activePatientAppointment.endTime).getTime()
+          : existingStart + (activePatientAppointment.durationMinutes || 30) * 60 * 1000;
+
+        if (newStart < existingEnd && newEnd > existingStart) {
+          setBookingError(`Patient already has an active appointment (${activePatientAppointment.appointmentCode}) scheduled at this overlapping time (${new Date(existingStart).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}). Please select a different time slot or click 'Reschedule'.`);
+          return;
+        }
+      }
     }
 
     setBookingError('');
@@ -634,6 +648,9 @@ export const AppointmentModule: React.FC<AppointmentModuleProps> = ({
       await api.patch(`/appointments/${id}/status`, { status });
       fetchAppointments();
       fetchCalendarSummary();
+      if (bookingData.doctorId && bookingData.appointmentDate) {
+        fetchBusySlots(bookingData.doctorId, bookingData.appointmentDate);
+      }
     } catch (err: any) {
       alert(err.response?.data?.message || 'Error updating status');
     }
@@ -1638,6 +1655,7 @@ We look forward to seeing you!`;
             {filteredAppointments.map((apt) => {
               const isBilled = !!apt.consultationBill;
               const isBillPaid = isBilled && (apt.consultationBill?.paymentStatus === 'PAID' || (apt.consultationBill?.pendingBalance || 0) <= 0);
+              const isProcedureSlot = apt.visitType === 'PROCEDURE';
 
               return (
                 <div
@@ -1745,8 +1763,8 @@ We look forward to seeing you!`;
 
                     {/* Right block: Billing Done badge + Status Badge */}
                     <div className="flex items-center gap-2 shrink-0">
-                      {/* If Consultation Completed and Billing Done */}
-                      {apt.status === 'COMPLETED' && (
+                      {/* If Consultation Completed and Billing Done (Only for non-procedure visits) */}
+                      {apt.status === 'COMPLETED' && !isProcedureSlot && (
                         isBillPaid ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300 font-black text-xs shadow-2xs">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
@@ -1779,7 +1797,7 @@ We look forward to seeing you!`;
                         {apt.status === 'COMPLETED' ? (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Consultation Done</span>
+                            <span>{isProcedureSlot ? 'Procedure Done' : 'Consultation Done'}</span>
                           </>
                         ) : apt.status === 'IN_PROGRESS' ? (
                           <>
@@ -1901,15 +1919,15 @@ We look forward to seeing you!`;
                           <button
                             onClick={async () => {
                               await handleStatusChange(apt.id, 'COMPLETED');
-                              if (onNavigateToBilling) {
+                              if (!isProcedureSlot && onNavigateToBilling) {
                                 onNavigateToBilling(apt);
                               }
                             }}
                             className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
-                            title="Complete visit and immediately open billing"
+                            title={isProcedureSlot ? "Complete procedure" : "Complete visit and immediately open billing"}
                           >
                             <Check className="w-3 h-3 stroke-[3]" />
-                            <span>Done & Bill</span>
+                            <span>{isProcedureSlot ? 'Done' : 'Done & Bill'}</span>
                           </button>
 
                           <button
@@ -1939,24 +1957,24 @@ We look forward to seeing you!`;
                           <button
                             onClick={async () => {
                               await handleStatusChange(apt.id, 'COMPLETED');
-                              if (onNavigateToBilling) {
+                              if (!isProcedureSlot && onNavigateToBilling) {
                                 onNavigateToBilling(apt);
                               }
                             }}
                             className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
-                            title="Complete visit and immediately open billing"
+                            title={isProcedureSlot ? "Complete procedure" : "Complete visit and immediately open billing"}
                           >
                             <Check className="w-3 h-3 stroke-[3]" />
-                            <span>Done & Bill</span>
+                            <span>{isProcedureSlot ? 'Done' : 'Done & Bill'}</span>
                           </button>
                         </>
                       )}
 
-                      {/* COMPLETED: After Consultation */}
+                      {/* COMPLETED: After Visit */}
                       {apt.status === 'COMPLETED' && (
                         <>
-                          {/* If not billed yet, show Bill / Collect. Once paid, HIDE THIS BUTTON! */}
-                          {onNavigateToBilling && !isBillPaid && (
+                          {/* If not billed yet, show Bill / Collect for normal consultations only. Procedure slots are not billed through consultation bills! */}
+                          {onNavigateToBilling && !isBillPaid && !isProcedureSlot && (
                             <button
                               onClick={() => onNavigateToBilling(apt)}
                               title="Collect Consultation Fee"
@@ -2046,6 +2064,7 @@ We look forward to seeing you!`;
                 {filteredAppointments.map((apt) => {
                   const isBilled = !!apt.consultationBill;
                   const isBillPaid = isBilled && (apt.consultationBill?.paymentStatus === 'PAID' || (apt.consultationBill?.pendingBalance || 0) <= 0);
+                  const isProcedureSlot = apt.visitType === 'PROCEDURE';
 
                   return (
                     <tr key={apt.id} className="hover:bg-slate-50/70 transition">
@@ -2128,7 +2147,7 @@ We look forward to seeing you!`;
                             : 'bg-sky-50 text-[#0090e7] border border-sky-300'
                         }`}
                       >
-                        {apt.status === 'COMPLETED' ? '✓ Completed' : apt.status}
+                        {apt.status === 'COMPLETED' ? (isProcedureSlot ? '✓ Procedure Done' : '✓ Completed') : apt.status}
                       </span>
                     </td>
 
@@ -2170,15 +2189,15 @@ We look forward to seeing you!`;
                             <button
                               onClick={async () => {
                                 await handleStatusChange(apt.id, 'COMPLETED');
-                                if (onNavigateToBilling) {
+                                if (!isProcedureSlot && onNavigateToBilling) {
                                   onNavigateToBilling(apt);
                                 }
                               }}
                               className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
-                              title="Mark Completed and Open Billing"
+                              title={isProcedureSlot ? "Complete procedure" : "Mark Completed and Open Billing"}
                             >
                               <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                              <span>Done & Bill</span>
+                              <span>{isProcedureSlot ? 'Done' : 'Done & Bill'}</span>
                             </button>
 
                             {onNavigateToNotes && (
@@ -2238,15 +2257,15 @@ We look forward to seeing you!`;
                             <button
                               onClick={async () => {
                                 await handleStatusChange(apt.id, 'COMPLETED');
-                                if (onNavigateToBilling) {
+                                if (!isProcedureSlot && onNavigateToBilling) {
                                   onNavigateToBilling(apt);
                                 }
                               }}
                               className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
-                              title="Mark Completed and Open Billing"
+                              title={isProcedureSlot ? "Complete procedure" : "Mark Completed and Open Billing"}
                             >
                               <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                              <span>Done & Bill</span>
+                              <span>{isProcedureSlot ? 'Done' : 'Done & Bill'}</span>
                             </button>
 
                             {onNavigateToNotes && (
@@ -2264,7 +2283,7 @@ We look forward to seeing you!`;
 
                         {apt.status === 'COMPLETED' && (
                           <>
-                            {onNavigateToBilling && !isBillPaid && (
+                            {onNavigateToBilling && !isBillPaid && !isProcedureSlot && (
                               <button
                                 onClick={() => onNavigateToBilling(apt)}
                                 title="Collect Consultation Fee"
@@ -2401,7 +2420,7 @@ We look forward to seeing you!`;
                   </strong>{' '}
                   with <strong>Dr. {activePatientAppointment.doctor?.user?.fullName}</strong> ({activePatientAppointment.specialization}).
                 </p>
-                <div className="flex items-center gap-2 pt-1">
+                <div className="flex flex-wrap items-center gap-2 pt-1">
                   <button
                     type="button"
                     onClick={() => {
@@ -2422,11 +2441,14 @@ We look forward to seeing you!`;
                       });
                       setBookingError('');
                     }}
-                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-none transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Reschedule This Existing Appointment</span>
+                    <span>Reschedule Existing Appointment</span>
                   </button>
+                  <span className="text-[11px] text-amber-800 font-medium">
+                    • or select another slot below to book an additional appointment on this day
+                  </span>
                 </div>
               </div>
             )}
@@ -2802,7 +2824,7 @@ We look forward to seeing you!`;
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting || (!!activePatientAppointment && !isRescheduleMode)}
+                  disabled={submitting}
                   className={`px-5 py-2.5 text-white rounded-xl text-xs font-bold transition shadow-sm disabled:opacity-50 cursor-pointer flex items-center gap-1.5 ${
                     isRescheduleMode ? 'bg-amber-600 hover:bg-amber-700' : 'bg-[#0090e7] hover:bg-[#0077b6]'
                   }`}

@@ -2354,7 +2354,7 @@ export const ProceduresTreatmentsSubModule: React.FC<ProceduresTreatmentsSubModu
                   Doctor Time Slots ({calendarPickedDate})
                 </label>
                 <span className="text-[10px] text-slate-400 font-medium">
-                  {dayAppointments.length} existing booked on this date
+                  {dayAppointments.filter((a) => a.status !== 'CANCELLED' && a.status !== 'COMPLETED').length} existing booked on this date
                 </span>
               </div>
 
@@ -2370,6 +2370,7 @@ export const ProceduresTreatmentsSubModule: React.FC<ProceduresTreatmentsSubModu
                   }
                   return visibleSlots.map((slot) => {
                     const isBooked = dayAppointments.some((a) => {
+                      if (a.status === 'CANCELLED' || a.status === 'COMPLETED') return false;
                       const aptTime = new Date(a.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                       return aptTime === slot;
                     });

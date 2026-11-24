@@ -97,6 +97,10 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
   // Handle passed pending appointment from completed visit
   useEffect(() => {
     if (pendingAppointmentToBill) {
+      if (pendingAppointmentToBill.visitType === 'PROCEDURE') {
+        if (onClearPendingAppointment) onClearPendingAppointment();
+        return;
+      }
       setBillingTab('consultation');
       setSelectedAppointmentId(pendingAppointmentToBill.id || '');
       if (pendingAppointmentToBill.patient) {

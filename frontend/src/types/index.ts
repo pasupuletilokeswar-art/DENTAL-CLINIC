@@ -84,6 +84,8 @@ export interface RecommendedTreatment {
   advice?: string | null;
   plannedDate?: string | null;
   followUpDate?: string | null;
+  appointmentId?: string | null;
+  timeSlot?: string | null;
 }
 
 export interface ClinicalNote {
