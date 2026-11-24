@@ -37,3 +37,88 @@
 .clinic-app-layout .status-indicator {
   border-radius: 9999px !important;
 }
+
+/*
+ * High-Quality Clinical Print & Report Styles
+ */
+@media screen {
+  .reports-print-document {
+    display: none !important;
+  }
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm 12mm 12mm 12mm;
+  }
+
+  /* Reset layout constraints so print doesn't get clipped or side-scrolled */
+  html, body, #root, .clinic-app-layout, .clinic-app-layout > div, main {
+    overflow: visible !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    position: static !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* Hide app navigation, sidebar, headers, and UI controls in print */
+  aside,
+  header,
+  nav,
+  .no-print,
+  .print-hide,
+  .reports-screen-ui {
+    display: none !important;
+  }
+
+  /* Show dedicated print document */
+  .reports-print-document {
+    display: block !important;
+    width: 100% !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+  }
+
+  /* Clean tables formatting for print */
+  .reports-print-document table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto !important;
+  }
+
+  .reports-print-document tr {
+    page-break-inside: avoid !important;
+    page-break-after: auto !important;
+  }
+
+  .reports-print-document thead {
+    display: table-header-group !important;
+  }
+
+  .reports-print-document tfoot {
+    display: table-footer-group !important;
+  }
+
+  .reports-print-document th,
+  .reports-print-document td {
+    border: 1px solid #cbd5e1 !important;
+    padding: 5px 8px !important;
+    font-size: 11px !important;
+    color: #0f172a !important;
+  }
+
+  .reports-print-document th {
+    background-color: #f1f5f9 !important;
+    font-weight: 700 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}

@@ -102,6 +102,7 @@ export const ConsultationBillingModule: React.FC<BillingModuleProps> = ({
     if (pendingAppointmentToBill) {
       // Strictly prevent procedure visits from collecting consultation fee
       if (pendingAppointmentToBill.visitType === 'PROCEDURE') {
+        if (onClearPendingAppointment) onClearPendingAppointment();
         setBillingTab('procedure');
         return;
       }

@@ -193,6 +193,7 @@ export function App() {
                 onNavigateToBilling={(aptOrPatientId) => {
                   if (typeof aptOrPatientId === 'string') {
                     setSelectedPatientNav(aptOrPatientId);
+                    setActiveTab('billing');
                   } else if (aptOrPatientId && typeof aptOrPatientId === 'object') {
                     if (aptOrPatientId.visitType === 'PROCEDURE') {
                       setPendingProcedureToBill(aptOrPatientId);
@@ -202,8 +203,8 @@ export function App() {
                       setPendingProcedureToBill(null);
                     }
                     if (aptOrPatientId.patientId) setSelectedPatientNav(aptOrPatientId.patientId);
+                    setActiveTab('billing');
                   }
-                  setActiveTab('billing');
                 }}
                 onNavigateToPatient={(patientId) => {
                   if (patientId) setSelectedPatientNav(patientId);

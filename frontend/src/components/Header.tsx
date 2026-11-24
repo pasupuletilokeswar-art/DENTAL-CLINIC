@@ -21,7 +21,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onQuickAction, activeTabNa
   };
 
   return (
-    <header className="bg-white border-b border-slate-200/80 px-6 lg:px-8 py-3.5 flex items-center justify-between shrink-0 shadow-2xs">
+    <header className="no-print bg-white border-b border-slate-200/80 px-6 lg:px-8 py-3.5 flex items-center justify-between shrink-0 shadow-2xs">
       <div>
         <h2 className="text-xl lg:text-2xl font-black text-slate-900 tracking-tight">
           {isDashboard ? (

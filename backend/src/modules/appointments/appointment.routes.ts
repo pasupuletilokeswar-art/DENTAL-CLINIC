@@ -187,7 +187,7 @@ router.get('/busy-slots', authenticateToken, async (req: Request, res: Response)
       where: {
         doctorId,
         appointmentDate: { gte: start, lt: end },
-        status: { notIn: [AppointmentStatus.CANCELLED] },
+        status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.IN_PROGRESS] },
       },
       select: {
         id: true,
@@ -293,12 +293,18 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
 
     const { start: dayStart, end: dayEnd, exact: aptDate } = parseCalendarDateUTC(data.appointmentDate);
 
-    // 1. Prevent duplicate active appointments for the same patient on the same date
-    const activeAppointment = await prisma.appointment.findFirst({
+    const startDateTime = new Date(data.startTime);
+    const endDateTime = new Date(startDateTime.getTime() + data.durationMinutes * 60 * 1000);
+
+    // 1. Overlap conflict detection for the patient (prevent double-booking the patient in overlapping slots)
+    const patientOverlappingAppointment = await prisma.appointment.findFirst({
       where: {
         patientId: data.patientId,
-        appointmentDate: { gte: dayStart, lt: dayEnd },
         status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.IN_PROGRESS] },
+        AND: [
+          { startTime: { lt: endDateTime } },
+          { endTime: { gt: startDateTime } },
+        ],
       },
       include: {
         doctor: { include: { user: { select: { fullName: true } } } },
@@ -306,47 +312,23 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
       },
     });
 
-    if (activeAppointment) {
-      // If the booking request is for a procedure or treatment, seamlessly link the procedure to the active appointment
-      if (data.visitType === 'PROCEDURE' || data.procedureName) {
-        const updated = await prisma.appointment.update({
-          where: { id: activeAppointment.id },
-          data: {
-            procedureName: data.procedureName || activeAppointment.procedureName,
-            reasonForVisit: data.reasonForVisit || activeAppointment.reasonForVisit,
-          },
-          include: {
-            patient: true,
-            doctor: { include: { user: { select: { fullName: true } } } },
-          },
-        });
-        emitRealtimeEvent('appointment:created', updated);
-        emitRealtimeEvent('appointment:updated', updated);
-        return res.status(200).json({
-          success: true,
-          message: `Procedure slot linked to patient's active appointment (${updated.appointmentCode}) for today`,
-          appointment: updated,
-        });
-      }
-
-      const aptDateFormatted = activeAppointment.appointmentDate.toISOString().substring(0, 10);
-      const aptTimeFormatted = new Date(activeAppointment.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (patientOverlappingAppointment) {
+      const aptDateFormatted = patientOverlappingAppointment.appointmentDate.toISOString().substring(0, 10);
+      const aptTimeFormatted = new Date(patientOverlappingAppointment.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const aptEndFormatted = new Date(patientOverlappingAppointment.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       return res.status(409).json({
         success: false,
-        code: 'ACTIVE_APPOINTMENT_EXISTS',
-        activeAppointment,
-        message: `Patient ${activeAppointment.patient.name} already has an active appointment (${activeAppointment.appointmentCode}) on ${aptDateFormatted} at ${aptTimeFormatted} with Dr. ${activeAppointment.doctor.user.fullName}. Please reschedule instead of booking a duplicate.`,
+        code: 'PATIENT_TIME_CONFLICT',
+        activeAppointment: patientOverlappingAppointment,
+        message: `Patient ${patientOverlappingAppointment.patient.name} already has an active appointment (${patientOverlappingAppointment.appointmentCode}) scheduled during this time window (${aptTimeFormatted} - ${aptEndFormatted}) on ${aptDateFormatted} with Dr. ${patientOverlappingAppointment.doctor.user.fullName}. Please choose a non-overlapping time slot.`,
       });
     }
-
-    const startDateTime = new Date(data.startTime);
-    const endDateTime = new Date(startDateTime.getTime() + data.durationMinutes * 60 * 1000);
 
     // 2. Overlap conflict detection for the doctor
     const overlappingAppointment = await prisma.appointment.findFirst({
       where: {
         doctorId: data.doctorId,
-        status: { notIn: [AppointmentStatus.CANCELLED] },
+        status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.IN_PROGRESS] },
         AND: [
           { startTime: { lt: endDateTime } },
           { endTime: { gt: startDateTime } },
@@ -438,7 +420,7 @@ router.patch('/:id/reschedule', authenticateToken, async (req: Request, res: Res
       where: {
         id: { not: id },
         doctorId: existingApt.doctorId,
-        status: { notIn: [AppointmentStatus.CANCELLED] },
+        status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.IN_PROGRESS] },
         AND: [
           { startTime: { lt: endDateTime } },
           { endTime: { gt: startDateTime } },
@@ -456,6 +438,33 @@ router.patch('/:id/reschedule', authenticateToken, async (req: Request, res: Res
           overlapping.startTime
         ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} to ${new Date(
           overlapping.endTime
+        ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      });
+    }
+
+    // Overlap conflict detection for the patient (excluding this appointment)
+    const patientOverlapping = await prisma.appointment.findFirst({
+      where: {
+        id: { not: id },
+        patientId: existingApt.patientId,
+        status: { in: [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.IN_PROGRESS] },
+        AND: [
+          { startTime: { lt: endDateTime } },
+          { endTime: { gt: startDateTime } },
+        ],
+      },
+      include: {
+        doctor: { include: { user: { select: { fullName: true } } } },
+      },
+    });
+
+    if (patientOverlapping) {
+      return res.status(409).json({
+        success: false,
+        message: `Patient already has an overlapping appointment with Dr. ${patientOverlapping.doctor.user.fullName} from ${new Date(
+          patientOverlapping.startTime
+        ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} to ${new Date(
+          patientOverlapping.endTime
         ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
       });
     }

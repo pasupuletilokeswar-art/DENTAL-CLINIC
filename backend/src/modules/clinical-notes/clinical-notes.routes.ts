@@ -24,7 +24,14 @@ const clinicalNotesSchema = z.object({
   treatmentRecommendations: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   advice: z.string().optional().nullable(),
-});
+
+  // Enhanced fields:
+  durationOfComplaint: z.string().optional().nullable(),
+  patientDescription: z.string().optional().nullable(),
+  clinicalFindings: z.any().optional().nullable(),
+  recommendedTreatments: z.any().optional().nullable(),
+  followUpDate: z.string().optional().nullable(),
+}).passthrough();
 
 // GET /api/clinical-notes - List notes (with optional ?patientId=...)
 router.get('/', authenticateToken, async (req: Request, res: Response) => {
@@ -134,10 +141,11 @@ router.post('/', authenticateToken, async (req: Request, res: Response) => {
 
       // If tied to an appointment, auto-mark appointment as COMPLETED or IN_PROGRESS
       if (data.appointmentId) {
-        await tx.appointment.update({
+        const updatedApt = await tx.appointment.update({
           where: { id: data.appointmentId },
           data: { status: AppointmentStatus.COMPLETED },
         });
+        emitRealtimeEvent('appointment:updated', updatedApt);
       }
 
       return createdNote;
@@ -179,14 +187,19 @@ router.put('/:id', authenticateToken, async (req: Request, res: Response) => {
       where: { id },
       data: {
         chiefComplaints: data.chiefComplaints,
-        detailedMedicalHistory: data.detailedMedicalHistory || null,
-        teethChart: data.teethChart || null,
-        observations: data.observations || null,
-        investigations: data.investigations || null,
+        detailedMedicalHistory: data.detailedMedicalHistory !== undefined ? data.detailedMedicalHistory : undefined,
+        teethChart: data.teethChart !== undefined ? data.teethChart : undefined,
+        observations: data.observations !== undefined ? data.observations : undefined,
+        investigations: data.investigations !== undefined ? data.investigations : undefined,
         diagnosis: data.diagnosis,
-        treatmentRecommendations: data.treatmentRecommendations || null,
-        notes: data.notes || null,
-        advice: data.advice || null,
+        treatmentRecommendations: data.treatmentRecommendations !== undefined ? data.treatmentRecommendations : undefined,
+        notes: data.notes !== undefined ? data.notes : undefined,
+        advice: data.advice !== undefined ? data.advice : undefined,
+        durationOfComplaint: data.durationOfComplaint !== undefined ? data.durationOfComplaint : undefined,
+        patientDescription: data.patientDescription !== undefined ? data.patientDescription : undefined,
+        clinicalFindings: data.clinicalFindings !== undefined ? data.clinicalFindings : undefined,
+        recommendedTreatments: data.recommendedTreatments !== undefined ? data.recommendedTreatments : undefined,
+        followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
       },
       include: {
         patient: true,
@@ -231,9 +244,12 @@ const recommendedTreatmentItemSchema = z.object({
   advice: z.string().optional().nullable(),
   plannedDate: z.string().optional().nullable(),
   followUpDate: z.string().optional().nullable(),
+  appointmentId: z.string().optional().nullable(),
+  timeSlot: z.string().optional().nullable(),
 }).passthrough();
 
 const examinationNoteSchema = z.object({
+  id: z.string().optional().nullable(),
   patientId: z.string().min(1, 'Patient is required'),
   doctorId: z.string().min(1, 'Doctor is required'),
   appointmentId: z.string().optional().nullable(),
@@ -348,32 +364,67 @@ router.post('/examination', authenticateToken, async (req: Request, res: Respons
     const parsedConsultationDate = data.consultationDate ? new Date(data.consultationDate) : new Date();
     const parsedFollowUpDate = data.followUpDate ? new Date(data.followUpDate) : null;
 
-    // 9. Persist into database
-    const createdNote = await prisma.clinicalNote.create({
-      data: {
-        patientId: patient.id,
-        doctorId: doctor.id,
-        appointmentId: data.appointmentId || null,
-        consultationDate: isNaN(parsedConsultationDate.getTime()) ? new Date() : parsedConsultationDate,
-        chiefComplaints: formattedComplaints,
-        detailedMedicalHistory: formattedHistory,
-        observations: formattedObservations,
-        diagnosis: formattedDiagnosis,
-        treatmentRecommendations: formattedRecs || null,
-        notes: data.notes?.trim() || null,
-        advice: formattedAdvice,
-        durationOfComplaint: data.durationOfComplaint?.trim() || null,
-        patientDescription: data.patientDescription?.trim() || null,
-        clinicalFindings: findingsList.length > 0 ? (findingsList as any) : undefined,
-        recommendedTreatments: recsList.length > 0 ? (recsList as any) : undefined,
-        followUpDate: parsedFollowUpDate && !isNaN(parsedFollowUpDate.getTime()) ? parsedFollowUpDate : null,
-      },
-      include: {
-        patient: true,
-        doctor: { include: { user: { select: { fullName: true } } } },
-        procedures: true,
-      },
-    });
+    // 9. Persist into database (update if existing id provided, otherwise create)
+    let createdNote;
+    if (data.id) {
+      const existing = await prisma.clinicalNote.findUnique({ where: { id: data.id } });
+      if (existing) {
+        createdNote = await prisma.clinicalNote.update({
+          where: { id: data.id },
+          data: {
+            patientId: patient.id,
+            doctorId: doctor.id,
+            appointmentId: data.appointmentId || existing.appointmentId,
+            consultationDate: isNaN(parsedConsultationDate.getTime()) ? existing.consultationDate : parsedConsultationDate,
+            chiefComplaints: formattedComplaints,
+            detailedMedicalHistory: formattedHistory,
+            observations: formattedObservations,
+            diagnosis: formattedDiagnosis,
+            treatmentRecommendations: formattedRecs || null,
+            notes: data.notes?.trim() || null,
+            advice: formattedAdvice,
+            durationOfComplaint: data.durationOfComplaint?.trim() || null,
+            patientDescription: data.patientDescription?.trim() || null,
+            clinicalFindings: findingsList.length > 0 ? (findingsList as any) : undefined,
+            recommendedTreatments: recsList.length > 0 ? (recsList as any) : undefined,
+            followUpDate: parsedFollowUpDate && !isNaN(parsedFollowUpDate.getTime()) ? parsedFollowUpDate : null,
+          },
+          include: {
+            patient: true,
+            doctor: { include: { user: { select: { fullName: true } } } },
+            procedures: true,
+          },
+        });
+      }
+    }
+
+    if (!createdNote) {
+      createdNote = await prisma.clinicalNote.create({
+        data: {
+          patientId: patient.id,
+          doctorId: doctor.id,
+          appointmentId: data.appointmentId || null,
+          consultationDate: isNaN(parsedConsultationDate.getTime()) ? new Date() : parsedConsultationDate,
+          chiefComplaints: formattedComplaints,
+          detailedMedicalHistory: formattedHistory,
+          observations: formattedObservations,
+          diagnosis: formattedDiagnosis,
+          treatmentRecommendations: formattedRecs || null,
+          notes: data.notes?.trim() || null,
+          advice: formattedAdvice,
+          durationOfComplaint: data.durationOfComplaint?.trim() || null,
+          patientDescription: data.patientDescription?.trim() || null,
+          clinicalFindings: findingsList.length > 0 ? (findingsList as any) : undefined,
+          recommendedTreatments: recsList.length > 0 ? (recsList as any) : undefined,
+          followUpDate: parsedFollowUpDate && !isNaN(parsedFollowUpDate.getTime()) ? parsedFollowUpDate : null,
+        },
+        include: {
+          patient: true,
+          doctor: { include: { user: { select: { fullName: true } } } },
+          procedures: true,
+        },
+      });
+    }
 
     // If tied to an appointment, auto-mark appointment as COMPLETED
     if (data.appointmentId) {
@@ -381,6 +432,9 @@ router.post('/examination', authenticateToken, async (req: Request, res: Respons
         .update({
           where: { id: data.appointmentId },
           data: { status: AppointmentStatus.COMPLETED },
+        })
+        .then((updated) => {
+          emitRealtimeEvent('appointment:updated', updated);
         })
         .catch(() => null);
     }

@@ -81,6 +81,15 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onNavigateTab }) =
     window.print();
   };
 
+  const getPeriodLabel = () => {
+    if (period === 'today') return 'Today';
+    if (period === 'this_week') return 'This Week';
+    if (period === 'this_month') return 'This Month';
+    if (period === 'this_year') return 'This Year';
+    if (period === 'custom') return `${startDate || 'Start Date'} to ${endDate || 'End Date'}`;
+    return period;
+  };
+
   const handleExportCsv = () => {
     if (!analytics) return;
     const rows = [
@@ -150,10 +159,14 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onNavigateTab }) =
   }
 
   return (
-    <div className="space-y-6">
+    <div>
       {/* ======================================================== */}
-      {/* FILTER BAR & REPORT CONTROLS (Preserving Existing UI)     */}
+      {/* SCREEN UI: Interactive Dashboard (Hidden during print)    */}
       {/* ======================================================== */}
+      <div className="reports-screen-ui space-y-6">
+        {/* ======================================================== */}
+        {/* FILTER BAR & REPORT CONTROLS (Preserving Existing UI)     */}
+        {/* ======================================================== */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs font-bold text-slate-700 mr-2 flex items-center gap-1">
@@ -877,6 +890,266 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onNavigateTab }) =
           </div>
         </div>
       )}
+      </div>
+
+      {/* ======================================================== */}
+      {/* PRINT-ONLY FORMAL CLINICAL & FINANCIAL REPORT DATA       */}
+      {/* (Only rendered during print, replaces dashboard preview)  */}
+      {/* ======================================================== */}
+      <div className="reports-print-document p-4 text-slate-900 bg-white">
+        {/* Clinic Official Header */}
+        <div className="border-b-2 border-slate-900 pb-3 mb-4">
+          <div className="flex items-start justify-between">
+            <div>
+              <h1 className="text-xl font-black tracking-tight text-slate-900 uppercase">
+                HospAI Dental &amp; Orthopedic Clinic
+              </h1>
+              <p className="text-xs font-semibold text-slate-600 mt-0.5">
+                Real-Time Clinical Operations, Financial Performance &amp; Audit Statement
+              </p>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                License No: HP-DEN-2026-0881 | Contact: +91 98495 67876 | Email: clinical@hospai-dental.com
+              </p>
+            </div>
+            <div className="text-right text-[11px] space-y-0.5">
+              <div className="font-bold text-slate-800">
+                Reporting Period: <span className="uppercase text-teal-800 font-black">{getPeriodLabel()}</span>
+              </div>
+              <div className="text-slate-600">
+                Generated Date: {new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </div>
+              <div className="text-[10px] text-slate-500 font-medium">
+                Audit Category: {activeReportTab === 'overview' ? 'Comprehensive Master Report' : activeReportTab.toUpperCase()}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 1: EXECUTIVE FINANCIAL SUMMARY TABLE */}
+        <div className="mb-4">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800 bg-slate-100 px-2 py-1 border border-slate-300 border-b-0">
+            1. Financial Collections &amp; Outstanding Dues Summary
+          </h2>
+          <table className="w-full text-xs border border-slate-300">
+            <thead>
+              <tr className="bg-slate-50 font-bold text-slate-700">
+                <th className="p-1.5 text-left border border-slate-300 w-1/2">Revenue / Receivables Category</th>
+                <th className="p-1.5 text-right border border-slate-300 w-1/4">Amount (INR)</th>
+                <th className="p-1.5 text-left border border-slate-300 w-1/4">Operational Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="p-1.5 border border-slate-300 font-bold text-slate-800">Total Net Collections Realized</td>
+                <td className="p-1.5 border border-slate-300 text-right font-black text-slate-900">₹{analytics?.totalRevenueCollected?.toLocaleString() || 0}</td>
+                <td className="p-1.5 border border-slate-300 text-slate-600">Realized deposit across consultations, pharmacy &amp; OT</td>
+              </tr>
+              <tr>
+                <td className="p-1.5 border border-slate-300">Doctor Consultation Collections</td>
+                <td className="p-1.5 border border-slate-300 text-right font-semibold">₹{(analytics?.collections?.consultation || 0).toLocaleString()}</td>
+                <td className="p-1.5 border border-slate-300 text-slate-600">OPD consultations fee receipts</td>
+              </tr>
+              <tr>
+                <td className="p-1.5 border border-slate-300">Dental Operations &amp; Procedures Collections</td>
+                <td className="p-1.5 border border-slate-300 text-right font-semibold">₹{(analytics?.collections?.operations || 0).toLocaleString()}</td>
+                <td className="p-1.5 border border-slate-300 text-slate-600">Minor &amp; major oral surgical procedures</td>
+              </tr>
+              <tr>
+                <td className="p-1.5 border border-slate-300">Pharmacy Medicine Collections</td>
+                <td className="p-1.5 border border-slate-300 text-right font-semibold">₹{(analytics?.collections?.pharmacy || 0).toLocaleString()}</td>
+                <td className="p-1.5 border border-slate-300 text-slate-600">Direct prescription dispensing receipts</td>
+              </tr>
+              <tr className="bg-rose-50/40">
+                <td className="p-1.5 border border-slate-300 font-bold text-rose-900">Total Active Outstanding Receivables</td>
+                <td className="p-1.5 border border-slate-300 text-right font-black text-rose-900">₹{analytics?.totalOutstanding?.toLocaleString() || 0}</td>
+                <td className="p-1.5 border border-slate-300 text-rose-800 font-medium">Pending balances across {analytics?.receivables?.unpaidInvoicesCount || 0} active invoices</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* SECTION 2: DOCTOR CONSULTATION PERFORMANCE TABLE */}
+        <div className="mb-4">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800 bg-slate-100 px-2 py-1 border border-slate-300 border-b-0">
+            2. Doctor Consultation &amp; Clinical Performance Breakdown
+          </h2>
+          <table className="w-full text-xs border border-slate-300">
+            <thead>
+              <tr className="bg-slate-50 font-bold text-slate-700">
+                <th className="p-1.5 text-left border border-slate-300">Doctor Name</th>
+                <th className="p-1.5 text-left border border-slate-300">Specialization / Department</th>
+                <th className="p-1.5 text-center border border-slate-300">Consultations</th>
+                <th className="p-1.5 text-right border border-slate-300">Revenue Realized (INR)</th>
+                <th className="p-1.5 text-right border border-slate-300">Pending Dues (INR)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {analytics?.doctorReport && analytics.doctorReport.length > 0 ? (
+                analytics.doctorReport.map((doc: any) => (
+                  <tr key={doc.doctorId}>
+                    <td className="p-1.5 border border-slate-300 font-bold">{doc.doctorName}</td>
+                    <td className="p-1.5 border border-slate-300">{doc.specialization}</td>
+                    <td className="p-1.5 border border-slate-300 text-center font-semibold">{doc.totalConsultations}</td>
+                    <td className="p-1.5 border border-slate-300 text-right font-bold">₹{doc.revenueCollected?.toLocaleString() || 0}</td>
+                    <td className="p-1.5 border border-slate-300 text-right font-medium text-rose-700">₹{doc.pendingBalance?.toLocaleString() || 0}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5} className="p-2 text-center text-slate-500 border border-slate-300">
+                    No doctor consultations recorded in this reporting period.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+            {analytics?.doctorReport && analytics.doctorReport.length > 0 && (
+              <tfoot>
+                <tr className="bg-slate-100 font-bold">
+                  <td colSpan={2} className="p-1.5 border border-slate-300 text-right">Total Aggregate:</td>
+                  <td className="p-1.5 border border-slate-300 text-center">{analytics.doctorReport.reduce((acc: number, d: any) => acc + (d.totalConsultations || 0), 0)}</td>
+                  <td className="p-1.5 border border-slate-300 text-right">₹{analytics.doctorReport.reduce((acc: number, d: any) => acc + (d.revenueCollected || 0), 0).toLocaleString()}</td>
+                  <td className="p-1.5 border border-slate-300 text-right text-rose-700">₹{analytics.doctorReport.reduce((acc: number, d: any) => acc + (d.pendingBalance || 0), 0).toLocaleString()}</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+
+        {/* SECTION 3 & 4 IN TWO COLUMNS */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          {/* Operations & Dental Procedures */}
+          <div>
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800 bg-slate-100 px-2 py-1 border border-slate-300 border-b-0">
+              3. Operations &amp; Dental Procedures Data
+            </h2>
+            <table className="w-full text-xs border border-slate-300">
+              <tbody>
+                <tr>
+                  <td className="p-1.5 border border-slate-300 font-semibold">Completed Procedures</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-bold">{analytics?.operations?.totalProcedures || 0} procedures</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300">Total Procedure Value Billed</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-bold">₹{analytics?.operations?.billed?.toLocaleString() || 0}</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300">Procedure Collections Realized</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-bold text-emerald-800">₹{analytics?.operations?.collected?.toLocaleString() || 0}</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300">Pending Procedure Dues</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-bold text-rose-700">₹{analytics?.operations?.pending?.toLocaleString() || 0}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pharmacy & FEFO Stock */}
+          <div>
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800 bg-slate-100 px-2 py-1 border border-slate-300 border-b-0">
+              4. Pharmacy &amp; FEFO Stock Inventory
+            </h2>
+            <table className="w-full text-xs border border-slate-300">
+              <tbody>
+                <tr>
+                  <td className="p-1.5 border border-slate-300 font-semibold">Pharmacy Sales Billed</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-bold">₹{analytics?.pharmacy?.totalSales?.toLocaleString() || 0}</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300">Realized Cash Collections</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-bold text-emerald-800">₹{analytics?.pharmacy?.salesCollected?.toLocaleString() || 0}</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300">Total Inward Purchases</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-semibold">₹{analytics?.pharmacy?.totalPurchases?.toLocaleString() || 0}</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300 text-rose-700 font-semibold">Expired Batches (FEFO Alert)</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-bold text-rose-700">{analytics?.pharmacy?.expiredBatchesCount || 0}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* SECTION 5 & 6 IN TWO COLUMNS */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          {/* Patient Demographics & Age Distribution */}
+          <div>
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800 bg-slate-100 px-2 py-1 border border-slate-300 border-b-0">
+              5. Patient Volume &amp; Demographics
+            </h2>
+            <table className="w-full text-xs border border-slate-300">
+              <tbody>
+                <tr>
+                  <td className="p-1.5 border border-slate-300 font-semibold">Total Registered (All-Time)</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-bold">{analytics?.totalRegisteredPatientsAllTime || 0} patients</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300 font-semibold">New Patients in Period</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-bold text-teal-800">{analytics?.totalPatientsRegistered || 0}</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300">Pediatric (0–12 yrs, Primary Dentition)</td>
+                  <td className="p-1.5 border border-slate-300 text-right">{analytics?.patientDemographics?.ageDistribution?.pediatric || 0}</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300">Adults (20–59 yrs) / Seniors (60+)</td>
+                  <td className="p-1.5 border border-slate-300 text-right">
+                    {(analytics?.patientDemographics?.ageDistribution?.adults || 0) + (analytics?.patientDemographics?.ageDistribution?.seniors || 0)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Appointments & Dental Lab Data */}
+          <div>
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800 bg-slate-100 px-2 py-1 border border-slate-300 border-b-0">
+              6. Appointments &amp; Dental Lab Status
+            </h2>
+            <table className="w-full text-xs border border-slate-300">
+              <tbody>
+                <tr>
+                  <td className="p-1.5 border border-slate-300 font-semibold">Total Appointments Booked</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-bold">{analytics?.appointments?.total || 0}</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300">Completed Consultations</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-bold text-emerald-800">{analytics?.appointments?.completed || 0}</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300">Dental Lab Cases Sent</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-semibold">{analytics?.dentalLab?.totalLabCases || 0} cases</td>
+                </tr>
+                <tr>
+                  <td className="p-1.5 border border-slate-300">Lab Items Received / Delivered</td>
+                  <td className="p-1.5 border border-slate-300 text-right font-semibold">
+                    {analytics?.dentalLab?.physicalItemsReceived || 0} received / {analytics?.dentalLab?.itemsHandedOver || 0} delivered
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* OFFICIAL SIGNATURES & VERIFICATION */}
+        <div className="mt-8 pt-4 border-t border-slate-400">
+          <div className="flex justify-between items-end text-xs">
+            <div className="text-center w-48">
+              <div className="border-b border-slate-400 pb-1 mb-1 font-bold text-slate-800">Clinic Front Desk / Reception</div>
+              <p className="text-[10px] text-slate-500">Prepared &amp; Audited By</p>
+            </div>
+            <div className="text-center w-52">
+              <div className="border-b border-slate-400 pb-1 mb-1 font-bold text-slate-800">Authorized Dental Surgeon</div>
+              <p className="text-[10px] text-slate-500">Medical Director / Clinic Seal</p>
+            </div>
+          </div>
+          <div className="text-center text-[9px] text-slate-400 mt-4">
+            *** This is an official computer-generated audit report from HospAI Real-Time Dental Clinical Operations Hub. ***
+          </div>
+        </div>
+      </div>
     </div>
   );
 };

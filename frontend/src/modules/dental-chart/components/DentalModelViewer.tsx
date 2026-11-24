@@ -26,12 +26,16 @@ interface DentalModelViewerProps {
   selectedFDI: number;
   onSelectTooth: (fdi: number) => void;
   findings: DentalFindingItem[];
+  showMiniArchSelector?: boolean;
+  className?: string;
 }
 
 export const DentalModelViewer: React.FC<DentalModelViewerProps> = ({
   selectedFDI,
   onSelectTooth,
   findings,
+  showMiniArchSelector = true,
+  className,
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -396,7 +400,7 @@ export const DentalModelViewer: React.FC<DentalModelViewerProps> = ({
       const isLeftHalf = toothScreenX < containerW * 0.5;
       if (isLeftHalf) {
         // Check if placing badge to the left would collide with left edge OR bottom-left MiniArchSelector (x: 0..210, y: H-280..H)
-        const inLowerLeftZone = toothScreenY > containerH - 280;
+        const inLowerLeftZone = showMiniArchSelector && toothScreenY > containerH - 280;
         const fitsOnLeft = toothScreenX - badgeW - 40 >= padX && !inLowerLeftZone;
 
         if (fitsOnLeft) {
@@ -564,7 +568,7 @@ export const DentalModelViewer: React.FC<DentalModelViewerProps> = ({
   return (
     <div
       ref={containerRef}
-      className="relative flex-1 w-full min-h-[500px] h-[520px] sm:h-[580px] lg:h-[650px] lg:max-h-[650px] bg-[#071923] rounded-3xl overflow-hidden border border-slate-800 shadow-xl select-none"
+      className={`relative w-full ${className || 'min-h-[500px] h-[520px] sm:h-[580px] lg:h-[650px] lg:max-h-[650px]'} bg-[#071923] rounded-2xl overflow-hidden border border-slate-800 shadow-xl select-none`}
     >
       {/* 3D Canvas Mount */}
       <div ref={mountRef} className="w-full h-full" />
@@ -687,12 +691,14 @@ export const DentalModelViewer: React.FC<DentalModelViewerProps> = ({
       )}
 
       {/* 2. Mini Dental Arch Selector (Bottom Left) */}
-      <MiniArchSelector
-        selectedFDI={selectedFDI}
-        onSelectTooth={onSelectTooth}
-        toothConditionColors={toothConditionColors}
-        onRotateDirection={handleRotateDirection}
-      />
+      {showMiniArchSelector && (
+        <MiniArchSelector
+          selectedFDI={selectedFDI}
+          onSelectTooth={onSelectTooth}
+          toothConditionColors={toothConditionColors}
+          onRotateDirection={handleRotateDirection}
+        />
+      )}
 
       {/* 3. Right Vertical Action Controls matching reference image */}
       <div className="absolute top-6 right-5 z-20 flex flex-col bg-slate-950/75 backdrop-blur-md border border-slate-800 rounded-2xl p-1 shadow-2xl gap-1">
