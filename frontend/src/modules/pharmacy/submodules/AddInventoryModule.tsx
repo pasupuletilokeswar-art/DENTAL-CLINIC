@@ -364,7 +364,7 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
 
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                MRP (₹) <span className="text-teal-700 text-[10px] lowercase font-normal">(patient retail price, incl. tax)</span>
+                MRP (₹) <span className="text-emerald-700 text-[10px] font-bold lowercase">(patient selling price, incl. tax) *</span>
               </label>
               <input
                 type="number"
@@ -372,9 +372,12 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
                 min="0"
                 value={invForm.mrp || ''}
                 onChange={(e) => handleMrpChange(parseFloat(e.target.value) || 0)}
-                placeholder="Enter MRP (e.g. 100)"
+                placeholder="Enter Retail MRP (e.g. 100)"
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-black text-sm text-slate-900 focus:border-teal-500"
               />
+              <span className="text-[10px] text-slate-400 mt-0.5 block">
+                Printed on medicine pack. Customer pays this final price inclusive of tax.
+              </span>
             </div>
           </div>
 
@@ -392,7 +395,7 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
 
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                SELLING PRICE BEFORE TAX (₹) <span className="text-emerald-700 text-[10px] font-bold lowercase">(auto-calculated)</span>
+                BASE PRICE BEFORE TAX (₹) <span className="text-teal-700 text-[10px] font-bold lowercase">(excl. tax)</span>
               </label>
               <input
                 type="number"
@@ -400,30 +403,39 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
                 min="0"
                 value={invForm.sellingPriceBeforeTax || ''}
                 onChange={(e) => handlePriceBeforeTaxChange(parseFloat(e.target.value) || 0)}
-                placeholder="Auto-calculated from MRP & Tax"
+                placeholder="Base price before GST"
                 className="w-full px-3 py-2 bg-slate-50 border border-teal-300 rounded-xl font-bold text-teal-800"
               />
+              <span className="text-[10px] text-slate-400 mt-0.5 block">
+                Taxable value (MRP ÷ (1 + Tax%)). Auto-calculates bidirectional with MRP.
+              </span>
             </div>
           </div>
 
           {/* Real-time Tax & Price Calculation Breakdown Card */}
           {(invForm.mrp > 0 || invForm.sellingPriceBeforeTax > 0) && (
-            <div className="p-3 bg-gradient-to-r from-teal-50 to-emerald-50 border border-teal-200 rounded-xl flex items-center justify-between text-xs animate-in fade-in">
-              <div>
-                <span className="text-slate-500 font-bold block text-[10px] uppercase">Price Before Tax</span>
-                <span className="font-bold text-slate-800 text-sm">₹{invForm.sellingPriceBeforeTax.toFixed(2)}</span>
+            <div className="p-3.5 bg-gradient-to-r from-teal-50 via-emerald-50 to-sky-50 border border-teal-200 rounded-xl space-y-2 animate-in fade-in">
+              <div className="flex items-center justify-between text-xs">
+                <div>
+                  <span className="text-slate-500 font-bold block text-[10px] uppercase">Base Price (Excl. Tax)</span>
+                  <span className="font-extrabold text-slate-800 text-sm">₹{invForm.sellingPriceBeforeTax.toFixed(2)}</span>
+                </div>
+                <div className="text-center">
+                  <span className="text-slate-500 font-bold block text-[10px] uppercase">
+                    + GST Tax ({invForm.sellingTax || '12%'})
+                  </span>
+                  <span className="font-extrabold text-sky-800 text-sm">
+                    +₹{Math.max(0, invForm.mrp - invForm.sellingPriceBeforeTax).toFixed(2)}
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-slate-500 font-bold block text-[10px] uppercase">= Patient Selling Price (MRP)</span>
+                  <span className="font-black text-emerald-700 text-base">₹{invForm.mrp.toFixed(2)}</span>
+                </div>
               </div>
-              <div className="text-center">
-                <span className="text-slate-500 font-bold block text-[10px] uppercase">
-                  GST Tax ({invForm.sellingTax || '12%'})
-                </span>
-                <span className="font-bold text-teal-700 text-sm">
-                  +₹{Math.max(0, invForm.mrp - invForm.sellingPriceBeforeTax).toFixed(2)}
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="text-slate-500 font-bold block text-[10px] uppercase">Final Selling MRP</span>
-                <span className="font-black text-emerald-700 text-base">₹{invForm.mrp.toFixed(2)}</span>
+              <div className="text-[10px] text-slate-500 bg-white/70 p-1.5 rounded-lg border border-teal-100 flex items-center justify-between">
+                <span>Customer pays MRP: <strong>₹{invForm.mrp.toFixed(2)}</strong></span>
+                <span>Tax included: <strong>₹{Math.max(0, invForm.mrp - invForm.sellingPriceBeforeTax).toFixed(2)} ({invForm.sellingTax || '12%'})</strong></span>
               </div>
             </div>
           )}
@@ -603,19 +615,19 @@ export const AddInventoryModule: React.FC<AddInventoryModuleProps> = ({
 
           <div className="pt-2 border-t border-slate-100 space-y-2">
             <div className="flex justify-between items-center text-xs">
-              <span className="text-slate-500 font-medium">Selling Price Before Tax:</span>
+              <span className="text-slate-500 font-medium">Base Price (Excl. Tax):</span>
               <span className="font-mono font-bold text-slate-800 text-sm">
                 ₹{calcMrp > 0 ? (calcMrp / (1 + calcTax / 100)).toFixed(2) : '0.00'}
               </span>
             </div>
             <div className="flex justify-between items-center text-xs">
               <span className="text-slate-500 font-medium">GST Tax Amount ({calcTax}%):</span>
-              <span className="font-mono font-bold text-teal-700">
+              <span className="font-mono font-bold text-sky-800">
                 +₹{calcMrp > 0 ? (calcMrp - calcMrp / (1 + calcTax / 100)).toFixed(2) : '0.00'}
               </span>
             </div>
             <div className="flex justify-between items-center text-xs font-black border-t border-dashed border-slate-200 pt-1.5">
-              <span className="text-slate-700">Total MRP:</span>
+              <span className="text-slate-800">Final Patient MRP (Incl. Tax):</span>
               <span className="font-mono text-emerald-700 text-base">₹{calcMrp.toFixed(2)}</span>
             </div>
           </div>

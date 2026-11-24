@@ -11,6 +11,7 @@ import {
   Package,
   Check,
   AlertOctagon,
+  ExternalLink,
 } from 'lucide-react';
 import { MedicineMaster } from '../../../types';
 import { ReorderItem } from '../types';
@@ -37,7 +38,16 @@ export const StockOrdersModule: React.FC<StockOrdersModuleProps> = ({
       return {};
     }
   });
-  const [orderSupplierPhone, setOrderSupplierPhone] = useState<string>('');
+  const [orderSupplierPhone, setOrderSupplierPhone] = useState<string>(() => {
+    try {
+      return localStorage.getItem('pharmacy_supplier_phone') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [showSupplierModal, setShowSupplierModal] = useState<boolean>(false);
+  const [modalSupplierPhone, setModalSupplierPhone] = useState<string>('');
+  const [pendingOrderMsg, setPendingOrderMsg] = useState<string>('');
   const [dismissedAlerts, setDismissedAlerts] = useState<boolean>(() => {
     try {
       return sessionStorage.getItem('pharmacy_alerts_dismissed') === 'true';
@@ -154,13 +164,8 @@ export const StockOrdersModule: React.FC<StockOrdersModuleProps> = ({
     }));
   };
 
-  const handleSendOrderWhatsApp = () => {
+  const buildOrderWhatsAppText = (): string => {
     const itemsToOrder = reorderItems.filter((m) => selectedOrderIds.includes(m.id));
-    if (itemsToOrder.length === 0) {
-      alert('Please select at least one medicine using the checkboxes to generate the order.');
-      return;
-    }
-
     const dateStr = new Date().toLocaleDateString('en-IN', {
       day: '2-digit',
       month: 'short',
@@ -184,7 +189,11 @@ export const StockOrdersModule: React.FC<StockOrdersModuleProps> = ({
     });
     msg += `------------------------------------\n`;
     msg += `Please confirm order availability and expected delivery. Thank you!`;
+    return msg;
+  };
 
+  const markSelectedItemsAsOrdered = () => {
+    const itemsToOrder = reorderItems.filter((m) => selectedOrderIds.includes(m.id));
     const updatedStatus = { ...orderedStatusMap };
     const today = new Date().toLocaleDateString('en-IN');
     itemsToOrder.forEach((item) => {
@@ -195,25 +204,49 @@ export const StockOrdersModule: React.FC<StockOrdersModuleProps> = ({
     try {
       localStorage.setItem('pharmacy_ordered_status', JSON.stringify(updatedStatus));
     } catch {}
+  };
+
+  const handleSendOrderWhatsApp = () => {
+    const itemsToOrder = reorderItems.filter((m) => selectedOrderIds.includes(m.id));
+    if (itemsToOrder.length === 0) {
+      alert('Please select at least one medicine using the checkboxes to generate the order.');
+      return;
+    }
+
+    const msg = buildOrderWhatsAppText();
+    setPendingOrderMsg(msg);
 
     const cleanPhone = orderSupplierPhone.replace(/[^0-9]/g, '');
-    if (cleanPhone) {
+    if (cleanPhone && cleanPhone.length >= 10) {
       const intlPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-      window.open(`https://wa.me/${intlPhone}?text=${encodeURIComponent(msg)}`, '_blank');
+      markSelectedItemsAsOrdered();
+      const url = `https://api.whatsapp.com/send?phone=${intlPhone}&text=${encodeURIComponent(msg)}`;
+      window.open(url, 'whatsapp_session');
     } else {
-      navigator.clipboard.writeText(msg);
-      const promptPhone = prompt(
-        'Order list copied to clipboard! Enter supplier WhatsApp 10-digit number to open chat directly, or leave blank:',
-        ''
-      );
-      if (promptPhone && promptPhone.trim()) {
-        const p = promptPhone.trim().replace(/[^0-9]/g, '');
-        const ip = p.length === 10 ? `91${p}` : p;
-        window.open(`https://wa.me/${ip}?text=${encodeURIComponent(msg)}`, '_blank');
-      } else {
-        alert('Order list copied to clipboard! You can paste it into WhatsApp, SMS, or Email.');
-      }
+      setModalSupplierPhone(orderSupplierPhone);
+      setShowSupplierModal(true);
     }
+  };
+
+  const handleConfirmModalSendWhatsApp = (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = modalSupplierPhone.replace(/[^0-9]/g, '');
+    if (!clean || clean.length < 10) {
+      alert('Please enter a valid 10-digit WhatsApp phone number.');
+      return;
+    }
+    const intlPhone = clean.length === 10 ? `91${clean}` : clean;
+    setOrderSupplierPhone(clean);
+    try {
+      localStorage.setItem('pharmacy_supplier_phone', clean);
+    } catch {}
+
+    markSelectedItemsAsOrdered();
+    setShowSupplierModal(false);
+
+    const msg = pendingOrderMsg || buildOrderWhatsAppText();
+    const url = `https://api.whatsapp.com/send?phone=${intlPhone}&text=${encodeURIComponent(msg)}`;
+    window.open(url, 'whatsapp_session');
   };
 
   const handleCopyOrderList = () => {
@@ -821,6 +854,82 @@ export const StockOrdersModule: React.FC<StockOrdersModuleProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Supplier WhatsApp Phone Input Modal */}
+      {showSupplierModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
+                  💬
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900">Send Order to Supplier WhatsApp</h3>
+                  <p className="text-[11px] text-slate-500">Dispatch Purchase Order directly to distributor</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSupplierModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmModalSendWhatsApp} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                  Supplier WhatsApp Number (10 Digits) *
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono">
+                    +91
+                  </span>
+                  <input
+                    type="tel"
+                    required
+                    autoFocus
+                    maxLength={10}
+                    value={modalSupplierPhone}
+                    onChange={(e) => setModalSupplierPhone(e.target.value.replace(/[^0-9]/g, ''))}
+                    placeholder="e.g. 9876543210"
+                    className="w-full pl-12 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Saved automatically for future medicine reorders so you don't have to enter it again.
+                </p>
+              </div>
+
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-950 space-y-1">
+                <div className="font-bold">Items included in this PO:</div>
+                <div className="text-[11px] text-emerald-800">
+                  {selectedOrderIds.length} medicine(s) selected with confirmed order quantities.
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowSupplierModal(false)}
+                  className="px-4 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold cursor-pointer transition shadow-xs flex items-center gap-1.5"
+                >
+                  <span>Open & Send on WhatsApp</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
